@@ -73,23 +73,180 @@ class Aircraft:
 
 import time
 
+# class GlobalPSO:
+#     def __init__(self, aircraft_list, min_speed, max_speed, dt, min_sep,
+#                  sep_weight, fuel_weight,
+#                  n_particles, w, c1, c2, max_iter,
+#                  horizon_steps=10):
+#         self.acs = aircraft_list
+#         self.m = len(aircraft_list)
+#         self.E = np.full(self.m, min_speed)
+#         self.L = np.full(self.m, max_speed)
+#         self.dt = dt
+#         self.min_sep = min_sep
+#         self.sep_w = sep_weight
+#         self.fuel_w = fuel_weight
+#         self.w, self.c1, self.c2 = w, c1, c2
+#         self.max_iter = max_iter
+#         self.horizon = horizon_steps
+
+#         self.X = np.random.uniform(self.E, self.L, (n_particles, self.m))
+#         self.V = np.zeros_like(self.X)
+#         self.pbest = self.X.copy()
+#         self.pbest_cost = np.full(n_particles, np.inf)
+#         self.gbest = None
+#         self.gbest_cost = np.inf
+
+#     def _simulate_cost(self, speeds):
+#         """
+#         Forward-simulate the given speed vector over a horizon and compute a combined separation cost
+#         speeds: candidate speeds for each aircraft
+#         return: weighted sum of penalties
+#         """
+#         # # --- profile timers ---
+#         # t0 = time.perf_counter()
+
+#         # # 1. Deep-copy each aircraft
+#         # sims = [copy.deepcopy(ac) for ac in self.acs]
+#         # t_copy = time.perf_counter()
+
+#         # sep_pen = fuel_pen = 0.0 
+#         # # record initial speeds for velocity‐penalty
+#         # init_speeds = [ac.speed for ac in sims]
+
+#         # # 2. Main simulation loop
+#         # t_sim = 0.0
+#         # for _ in range(self.horizon):
+#         #     step_start = time.perf_counter()
+#         #     # a) apply speeds & update positions
+#         #     for ac, s in zip(sims, speeds):
+#         #         ac.speed = np.clip(s, ac.min_speed, ac.max_speed)
+#         #         ac.update(self.dt)
+#         #     t_after_move = time.perf_counter()
+
+#         #     # b) separation checks
+#         #     for i in range(self.m):
+#         #         for j in range(i+1, self.m):
+#         #             d = sims[i].distance_to(sims[j])
+#         #             if d < self.min_sep:
+#         #                 sep_pen += (self.min_sep - d)**2
+#         #     t_after_sep = time.perf_counter()
+
+#         #     # accumulate simulation loop time
+#         #     t_sim += (t_after_move - step_start) + (t_after_sep - t_after_move)
+
+#         # # 3. Velocity‐deviation penalty
+#         # fuel_pen = sum((s - init_s)**2 for s, init_s in zip(speeds, init_speeds))
+#         # t_vel = time.perf_counter()
+
+#         # cost = self.sep_w * sep_pen + self.fuel_w * fuel_pen
+#         # t_end = time.perf_counter()
+
+#         # print({
+#         #         'copy_time':      t_copy - t0,
+#         #         'move_time':      (t_after_move - t0) - (t_copy - t0) if False else t_after_move - t_copy,
+#         #         'sep_time':       t_after_sep - t_after_move,
+#         #         'vel_pen_time':   t_vel - t_after_sep,
+#         #         'total_time':     t_end - t0,
+#         #         'simulate_steps': self.horizon,
+#         #         'pair_checks':    self.horizon * (self.m*(self.m-1)//2)
+#         #     })
+
+#         # return cost
+
+#         # Record each aircraft’s starting speed
+#         init_speeds = [ac.speed for ac in self.acs]
+
+#         sims = [copy.deepcopy(ac) for ac in self.acs]
+#         sep_pen = fuel_pen = 0.0
+        
+#         # Simulate for a fixed number of time steps
+#         for t in range(self.horizon):
+#             # Apply candidate speeds 
+#             for ac, s in zip(sims, speeds):
+#                 # Clip to aircraft's allowable speed bounds
+#                 ac.speed = np.clip(s, ac.min_speed, ac.max_speed)
+#                 # Move along the path segment, respecting acceleration inside ac.update()
+#                 ac.update(self.dt)
+            
+#             # After moving, check every pair for separation violations
+            
+#             # Conflict check only every 50 steps
+#             if t % 50 == 0:
+#                 for i in range(self.m):
+#                     for j in range(i + 1, self.m):
+#                         # Compute horizontal distance between clone i and j
+#                         d = sims[i].distance_to(sims[j])
+#                         # If too close, penalize squared gap below minimum separation
+#                         if d < self.min_sep:
+#                             sep_pen += (self.min_sep - d) ** 2
+        
+#         # After simulating, penalize deviations from initial speeds
+#         for s, init_s in zip(speeds, init_speeds):
+#             fuel_pen += (s - init_s)**2
+        
+#         return self.sep_w * sep_pen + self.fuel_w * fuel_pen
+
+#     def optimize(self):
+#         nP = self.X.shape[0]
+#         for _ in range(self.max_iter):
+#             for k in range(nP):
+#                 cost = self._simulate_cost(self.X[k])
+#                 if cost < self.pbest_cost[k]:
+#                     self.pbest_cost[k] = cost
+#                     self.pbest[k] = self.X[k].copy()
+#                 if cost < self.gbest_cost:
+#                     self.gbest_cost = cost
+#                     self.gbest = self.X[k].copy()
+#             r1, r2 = np.random.rand(nP, self.m), np.random.rand(nP, self.m)
+#             self.V = ( self.w * self.V
+#                      + self.c1 * r1 * (self.pbest - self.X)
+#                      + self.c2 * r2 * (self.gbest - self.X) )
+#             self.X = np.clip(self.X + self.V, self.E, self.L)
+#         return self.gbest.copy()
+
+
+import numpy as np
+import copy
+import bisect
+
 class GlobalPSO:
     def __init__(self, aircraft_list, min_speed, max_speed, dt, min_sep,
                  sep_weight, fuel_weight,
                  n_particles, w, c1, c2, max_iter,
-                 horizon_steps=10):
-        self.acs = aircraft_list
-        self.m = len(aircraft_list)
-        self.E = np.full(self.m, min_speed)
-        self.L = np.full(self.m, max_speed)
-        self.dt = dt
-        self.min_sep = min_sep
-        self.sep_w = sep_weight
-        self.fuel_w = fuel_weight
+                 horizon_steps=3000,  # total look-ahead steps
+                 step_skip=15        # only sample every 50 steps
+    ):
+        self.acs       = aircraft_list
+        self.m         = len(aircraft_list)
+        self.E         = np.full(self.m, min_speed)
+        self.L         = np.full(self.m, max_speed)
+        self.dt        = dt
+        self.min_sep   = min_sep
+        self.sep_w     = sep_weight
+        self.fuel_w    = fuel_weight
         self.w, self.c1, self.c2 = w, c1, c2
-        self.max_iter = max_iter
-        self.horizon = horizon_steps
+        self.max_iter  = max_iter
+        self.horizon   = horizon_steps
+        self.step_skip = step_skip
 
+        # Precompute each aircraft’s path cumulative‐length (in metres)
+        self.path_cumlens = []
+        self.path_pts     = []
+        for ac in self.acs:
+            # ac.path is list of Vector2(lon,lat)
+            pts = ac.path
+            dist = [0.0]
+            for A, B in zip(pts[:-1], pts[1:]):
+                mean_lat = np.deg2rad((A.y + B.y)/2)
+                dlat = (B.y - A.y)*M_PER_DEG
+                dlon = (B.x - A.x)*M_PER_DEG*np.cos(mean_lat)
+                dist.append(np.hypot(dlat, dlon))
+            cum = np.cumsum(dist)
+            self.path_cumlens.append(cum)
+            self.path_pts.append(pts)
+
+        # PSO arrays as before…
         self.X = np.random.uniform(self.E, self.L, (n_particles, self.m))
         self.V = np.zeros_like(self.X)
         self.pbest = self.X.copy()
@@ -98,94 +255,44 @@ class GlobalPSO:
         self.gbest_cost = np.inf
 
     def _simulate_cost(self, speeds):
-        """
-        Forward-simulate the given speed vector over a horizon and compute a combined separation cost
-        speeds: candidate speeds for each aircraft
-        return: weighted sum of penalties
-        """
-        # # --- profile timers ---
-        # t0 = time.perf_counter()
+        # 1) record initial speeds for velocity penalty
+        init_speeds = np.array([ac.speed for ac in self.acs])
 
-        # # 1. Deep-copy each aircraft
-        # sims = [copy.deepcopy(ac) for ac in self.acs]
-        # t_copy = time.perf_counter()
+        sep_pen = 0.0
+        # build sparse sample times: t = 0, K, 2K, ..., horizon
+        samples = np.arange(0, self.horizon+1, self.step_skip)
 
-        # sep_pen = fuel_pen = 0.0 
-        # # record initial speeds for velocity‐penalty
-        # init_speeds = [ac.speed for ac in sims]
+        for t in samples:
+            τ = t * self.dt
+            # compute each AC’s travelled distance
+            D = speeds * τ  # vector length m
 
-        # # 2. Main simulation loop
-        # t_sim = 0.0
-        # for _ in range(self.horizon):
-        #     step_start = time.perf_counter()
-        #     # a) apply speeds & update positions
-        #     for ac, s in zip(sims, speeds):
-        #         ac.speed = np.clip(s, ac.min_speed, ac.max_speed)
-        #         ac.update(self.dt)
-        #     t_after_move = time.perf_counter()
+            # lookup each AC’s position by bisect into cumlen
+            positions = []
+            for i in range(self.m):
+                cum = self.path_cumlens[i]
+                pts = self.path_pts[i]
+                d = min(D[i], cum[-1])
+                idx = bisect.bisect_right(cum, d) - 1
+                if idx >= len(pts)-1:
+                    positions.append(pts[-1])
+                else:
+                    A, B = pts[idx], pts[idx+1]
+                    seg_len = cum[idx+1] - cum[idx]
+                    frac = (d - cum[idx]) / seg_len if seg_len>0 else 0.0
+                    positions.append(A + (B - A)*frac)
 
-        #     # b) separation checks
-        #     for i in range(self.m):
-        #         for j in range(i+1, self.m):
-        #             d = sims[i].distance_to(sims[j])
-        #             if d < self.min_sep:
-        #                 sep_pen += (self.min_sep - d)**2
-        #     t_after_sep = time.perf_counter()
+            # pairwise separation check
+            for i in range(self.m):
+                for j in range(i+1, self.m):
+                    d_ij = positions[i].distance_to(positions[j])
+                    if d_ij < self.min_sep:
+                        sep_pen += (self.min_sep - d_ij)**2
 
-        #     # accumulate simulation loop time
-        #     t_sim += (t_after_move - step_start) + (t_after_sep - t_after_move)
+        # 3) velocity‐deviation penalty
+        vel_pen = np.sum((speeds - init_speeds)**2)
 
-        # # 3. Velocity‐deviation penalty
-        # fuel_pen = sum((s - init_s)**2 for s, init_s in zip(speeds, init_speeds))
-        # t_vel = time.perf_counter()
-
-        # cost = self.sep_w * sep_pen + self.fuel_w * fuel_pen
-        # t_end = time.perf_counter()
-
-        # print({
-        #         'copy_time':      t_copy - t0,
-        #         'move_time':      (t_after_move - t0) - (t_copy - t0) if False else t_after_move - t_copy,
-        #         'sep_time':       t_after_sep - t_after_move,
-        #         'vel_pen_time':   t_vel - t_after_sep,
-        #         'total_time':     t_end - t0,
-        #         'simulate_steps': self.horizon,
-        #         'pair_checks':    self.horizon * (self.m*(self.m-1)//2)
-        #     })
-
-        # return cost
-
-        # Record each aircraft’s starting speed
-        init_speeds = [ac.speed for ac in self.acs]
-
-        sims = [copy.deepcopy(ac) for ac in self.acs]
-        sep_pen = fuel_pen = 0.0
-        
-        # Simulate for a fixed number of time steps
-        for t in range(self.horizon):
-            # Apply candidate speeds 
-            for ac, s in zip(sims, speeds):
-                # Clip to aircraft's allowable speed bounds
-                ac.speed = np.clip(s, ac.min_speed, ac.max_speed)
-                # Move along the path segment, respecting acceleration inside ac.update()
-                ac.update(self.dt)
-            
-            # After moving, check every pair for separation violations
-            
-            # Conflict check only every 50 steps
-            if t % 50 == 0:
-                for i in range(self.m):
-                    for j in range(i + 1, self.m):
-                        # Compute horizontal distance between clone i and j
-                        d = sims[i].distance_to(sims[j])
-                        # If too close, penalize squared gap below minimum separation
-                        if d < self.min_sep:
-                            sep_pen += (self.min_sep - d) ** 2
-        
-        # After simulating, penalize deviations from initial speeds
-        for s, init_s in zip(speeds, init_speeds):
-            fuel_pen += (s - init_s)**2
-        
-        return self.sep_w * sep_pen + self.fuel_w * fuel_pen
+        return self.sep_w * sep_pen + self.fuel_w * vel_pen
 
     def optimize(self):
         nP = self.X.shape[0]
@@ -204,6 +311,7 @@ class GlobalPSO:
                      + self.c2 * r2 * (self.gbest - self.X) )
             self.X = np.clip(self.X + self.V, self.E, self.L)
         return self.gbest.copy()
+
 
 class ATCAgent:
     def __init__(self,
@@ -411,7 +519,7 @@ def runme(
     acceleration=0.5,
     min_speed=80.0,
     max_speed=130.0,
-    spawn_interval=105.0,
+    spawn_interval=400.0,
     pso_interval=200.0,        
     time_scale=100.0,
     fps=30,
@@ -423,7 +531,7 @@ def runme(
     pso_c1=1.2,
     pso_c2=1.2,
     pso_iters=20,
-    pso_horizon=20,
+    pso_horizon=800,
     ils_radius_m=400000.0
 ):
     sim = Visualization(
