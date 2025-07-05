@@ -2,6 +2,7 @@ import pygame
 import random
 import numpy as np
 import copy
+import bisect
 
 # approximate meters per degree latitude/longitude around Amsterdam
 M_PER_DEG = 111320
@@ -16,6 +17,31 @@ def compute_distance_m(path, idx):
         dlon = (b.x - a.x) * M_PER_DEG * np.cos(mean_lat)
         total += np.hypot(dlat, dlon)
     return total
+
+def _find_clusters(acs, radius):
+    # Build adjacency list
+    adj = {ac: [] for ac in acs}
+    for i, a in enumerate(acs):
+        for b in acs[i+1:]:
+            if a.distance_to(b) < radius:
+                adj[a].append(b)
+                adj[b].append(a)
+    # Extract connected components via DFS
+    clusters, seen = [], set()
+    for a in acs:
+        if a in seen: continue
+        stack, comp = [a], []
+        while stack:
+            u = stack.pop()
+            if u in seen: continue
+            seen.add(u)
+            comp.append(u)
+            for v in adj[u]:
+                if v not in seen:
+                    stack.append(v)
+        if len(comp) > 1:
+            clusters.append(comp)
+    return clusters
 
 
 class Aircraft:
@@ -70,145 +96,6 @@ class Aircraft:
     def is_finished(self):
         return self.segment >= len(self.path) - 1
 
-
-import time
-
-# class GlobalPSO:
-#     def __init__(self, aircraft_list, min_speed, max_speed, dt, min_sep,
-#                  sep_weight, fuel_weight,
-#                  n_particles, w, c1, c2, max_iter,
-#                  horizon_steps=10):
-#         self.acs = aircraft_list
-#         self.m = len(aircraft_list)
-#         self.E = np.full(self.m, min_speed)
-#         self.L = np.full(self.m, max_speed)
-#         self.dt = dt
-#         self.min_sep = min_sep
-#         self.sep_w = sep_weight
-#         self.fuel_w = fuel_weight
-#         self.w, self.c1, self.c2 = w, c1, c2
-#         self.max_iter = max_iter
-#         self.horizon = horizon_steps
-
-#         self.X = np.random.uniform(self.E, self.L, (n_particles, self.m))
-#         self.V = np.zeros_like(self.X)
-#         self.pbest = self.X.copy()
-#         self.pbest_cost = np.full(n_particles, np.inf)
-#         self.gbest = None
-#         self.gbest_cost = np.inf
-
-#     def _simulate_cost(self, speeds):
-#         """
-#         Forward-simulate the given speed vector over a horizon and compute a combined separation cost
-#         speeds: candidate speeds for each aircraft
-#         return: weighted sum of penalties
-#         """
-#         # # --- profile timers ---
-#         # t0 = time.perf_counter()
-
-#         # # 1. Deep-copy each aircraft
-#         # sims = [copy.deepcopy(ac) for ac in self.acs]
-#         # t_copy = time.perf_counter()
-
-#         # sep_pen = fuel_pen = 0.0 
-#         # # record initial speeds for velocity‐penalty
-#         # init_speeds = [ac.speed for ac in sims]
-
-#         # # 2. Main simulation loop
-#         # t_sim = 0.0
-#         # for _ in range(self.horizon):
-#         #     step_start = time.perf_counter()
-#         #     # a) apply speeds & update positions
-#         #     for ac, s in zip(sims, speeds):
-#         #         ac.speed = np.clip(s, ac.min_speed, ac.max_speed)
-#         #         ac.update(self.dt)
-#         #     t_after_move = time.perf_counter()
-
-#         #     # b) separation checks
-#         #     for i in range(self.m):
-#         #         for j in range(i+1, self.m):
-#         #             d = sims[i].distance_to(sims[j])
-#         #             if d < self.min_sep:
-#         #                 sep_pen += (self.min_sep - d)**2
-#         #     t_after_sep = time.perf_counter()
-
-#         #     # accumulate simulation loop time
-#         #     t_sim += (t_after_move - step_start) + (t_after_sep - t_after_move)
-
-#         # # 3. Velocity‐deviation penalty
-#         # fuel_pen = sum((s - init_s)**2 for s, init_s in zip(speeds, init_speeds))
-#         # t_vel = time.perf_counter()
-
-#         # cost = self.sep_w * sep_pen + self.fuel_w * fuel_pen
-#         # t_end = time.perf_counter()
-
-#         # print({
-#         #         'copy_time':      t_copy - t0,
-#         #         'move_time':      (t_after_move - t0) - (t_copy - t0) if False else t_after_move - t_copy,
-#         #         'sep_time':       t_after_sep - t_after_move,
-#         #         'vel_pen_time':   t_vel - t_after_sep,
-#         #         'total_time':     t_end - t0,
-#         #         'simulate_steps': self.horizon,
-#         #         'pair_checks':    self.horizon * (self.m*(self.m-1)//2)
-#         #     })
-
-#         # return cost
-
-#         # Record each aircraft’s starting speed
-#         init_speeds = [ac.speed for ac in self.acs]
-
-#         sims = [copy.deepcopy(ac) for ac in self.acs]
-#         sep_pen = fuel_pen = 0.0
-        
-#         # Simulate for a fixed number of time steps
-#         for t in range(self.horizon):
-#             # Apply candidate speeds 
-#             for ac, s in zip(sims, speeds):
-#                 # Clip to aircraft's allowable speed bounds
-#                 ac.speed = np.clip(s, ac.min_speed, ac.max_speed)
-#                 # Move along the path segment, respecting acceleration inside ac.update()
-#                 ac.update(self.dt)
-            
-#             # After moving, check every pair for separation violations
-            
-#             # Conflict check only every 50 steps
-#             if t % 50 == 0:
-#                 for i in range(self.m):
-#                     for j in range(i + 1, self.m):
-#                         # Compute horizontal distance between clone i and j
-#                         d = sims[i].distance_to(sims[j])
-#                         # If too close, penalize squared gap below minimum separation
-#                         if d < self.min_sep:
-#                             sep_pen += (self.min_sep - d) ** 2
-        
-#         # After simulating, penalize deviations from initial speeds
-#         for s, init_s in zip(speeds, init_speeds):
-#             fuel_pen += (s - init_s)**2
-        
-#         return self.sep_w * sep_pen + self.fuel_w * fuel_pen
-
-#     def optimize(self):
-#         nP = self.X.shape[0]
-#         for _ in range(self.max_iter):
-#             for k in range(nP):
-#                 cost = self._simulate_cost(self.X[k])
-#                 if cost < self.pbest_cost[k]:
-#                     self.pbest_cost[k] = cost
-#                     self.pbest[k] = self.X[k].copy()
-#                 if cost < self.gbest_cost:
-#                     self.gbest_cost = cost
-#                     self.gbest = self.X[k].copy()
-#             r1, r2 = np.random.rand(nP, self.m), np.random.rand(nP, self.m)
-#             self.V = ( self.w * self.V
-#                      + self.c1 * r1 * (self.pbest - self.X)
-#                      + self.c2 * r2 * (self.gbest - self.X) )
-#             self.X = np.clip(self.X + self.V, self.E, self.L)
-#         return self.gbest.copy()
-
-
-import numpy as np
-import copy
-import bisect
 
 class GlobalPSO:
     def __init__(self, aircraft_list, min_speed, max_speed, dt, min_sep,
@@ -317,13 +204,19 @@ class ATCAgent:
     def __init__(self,
                  min_speed, max_speed, accel,
                  min_sep, sep_weight, fuel_weight,
-                 particles, w, c1, c2, iters, horizon):
+                 particles, w, c1, c2, iters, horizon,
+                 local_comm_radius=20000.0,   # e.g. 4× min_sep
+                local_horizon=40,             # short look-ahead for local PSO
+                local_sep_weight=10000.0):    # heavy separation penalty
         self.min_speed   = min_speed
         self.max_speed   = max_speed
         self.accel       = accel
         self.min_sep     = min_sep
         self.sep_weight  = sep_weight
         self.fuel_weight = fuel_weight
+        self.local_comm_radius = local_comm_radius
+        self.local_horizon     = local_horizon
+        self.local_sep_weight  = local_sep_weight
 
         self.particles = particles
         self.w         = w
@@ -333,12 +226,13 @@ class ATCAgent:
         self.horizon   = horizon
 
     def communicate(self, aircraft_list, dt):
-        # only unfinished aircraft
+        # 1) pick unfinished aircraft
         acs = [ac for ac in aircraft_list if not ac.is_finished()]
         if len(acs) < 2:
             return
 
-        pso = GlobalPSO(
+        # 2) Global PSO over everyone for long horizon
+        global_pso = GlobalPSO(
             acs,
             self.min_speed, self.max_speed,
             dt, self.min_sep,
@@ -348,10 +242,30 @@ class ATCAgent:
             self.iters,
             horizon_steps=self.horizon
         )
-        best_speeds = pso.optimize()
-
-        for ac, s in zip(acs, best_speeds):
+        global_speeds = global_pso.optimize()
+        # apply global plan
+        for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
+
+        # 3) Local PSO for any nearby clusters
+        clusters = _find_clusters(acs, self.local_comm_radius)
+        for cluster in clusters:
+            # run a short‐horizon, high‐sep PSO on just that cluster
+            local_pso = GlobalPSO(
+                cluster,
+                self.min_speed, self.max_speed,
+                dt, self.min_sep,
+                self.local_sep_weight, self.fuel_weight,
+                max(10, len(cluster)*2),  # a few particles
+                self.w, self.c1, self.c2,
+                self.iters,
+                horizon_steps=self.local_horizon,
+                step_skip=1               # no skipping in short horizon
+            )
+            local_speeds = local_pso.optimize()
+            # override only these cluster members
+            for ac, s in zip(cluster, local_speeds):
+                ac.set_target_speed(s)
 
 
 class Visualization:
@@ -493,13 +407,23 @@ class Visualization:
             self.draw_paths()
             # pygame.draw.circle(self.screen, (0,255,0), self.ils_px, self.ils_radius_px, 2)
 
+            # Find any aircraft pairs closer than min_sep
+            conflict_ids = set()
+            for i, ac1 in enumerate(self.aircraft_list):
+                for ac2 in self.aircraft_list[i+1:]:
+                    if ac1.distance_to(ac2) < self.min_sep:
+                        conflict_ids.add(ac1.id)
+                        conflict_ids.add(ac2.id)
+
+            # Draw each aircraft in red if in conflict, or black otherwise
             for ac in self.aircraft_list:
                 x, y = self._geo_to_px(ac.position.y, ac.position.x)
-                color = Visualization.PALETTE[ac.id % len(Visualization.PALETTE)]
-                pygame.draw.circle(self.screen, color, (x,y), 4)
-                lbl = self.font.render(f"{ac.id}|{ac.speed:.0f}", True, (0,0,0))
+                # override default palette:
+                color = (255, 0, 0) if ac.id in conflict_ids else (0, 0, 0)
+                pygame.draw.circle(self.screen, color, (x, y), 4)
+                lbl = self.font.render(f"{ac.id}|{ac.speed:.0f}", True, color)
                 self.screen.blit(lbl, (x+6, y-6))
-                pygame.draw.circle(self.screen, color, (x,y), self.sep_radius_px, 1)
+                pygame.draw.circle(self.screen, color, (x, y), self.sep_radius_px, 1)
 
             # render time in top-left corner
             time_text = f"Time: {self.sim_time:.1f}s"
