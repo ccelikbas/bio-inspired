@@ -205,7 +205,6 @@ class GlobalPSO:
             self.X = np.clip(self.X + self.V, self.E, self.L)
         return self.gbest.copy()
 
-
 class ATCAgent:
     def __init__(self,
                  min_speed, max_speed, accel,
@@ -412,7 +411,7 @@ def runme(
     acceleration=0.5,
     min_speed=80.0,
     max_speed=130.0,
-    spawn_interval=400.0,
+    spawn_interval=105.0,
     pso_interval=200.0,        
     time_scale=100.0,
     fps=30,
@@ -424,7 +423,7 @@ def runme(
     pso_c1=1.2,
     pso_c2=1.2,
     pso_iters=20,
-    pso_horizon=420,
+    pso_horizon=20,
     ils_radius_m=400000.0
 ):
     sim = Visualization(
