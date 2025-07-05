@@ -96,18 +96,39 @@ class GlobalPSO:
         self.gbest_cost = np.inf
 
     def _simulate_cost(self, speeds):
+        """
+        Forward-simulate the given speed vector over a horizon and compute a combined separation cost
+        speeds: candidate speeds for each aircraft
+        return: weighted sum of penalties
+        """
+        # Record each aircraft’s starting speed
+        init_speeds = [ac.speed for ac in self.acs]
+
         sims = [copy.deepcopy(ac) for ac in self.acs]
         sep_pen = fuel_pen = 0.0
+        
+        # Simulate for a fixed number of time steps
         for _ in range(self.horizon):
+            # Apply candidate speeds 
             for ac, s in zip(sims, speeds):
+                # Clip to aircraft's allowable speed bounds
                 ac.speed = np.clip(s, ac.min_speed, ac.max_speed)
+                # Move along the path segment, respecting acceleration inside ac.update()
                 ac.update(self.dt)
-                fuel_pen += s**2
+            
+            # After moving, check every pair for separation violations
             for i in range(self.m):
-                for j in range(i+1, self.m):
+                for j in range(i + 1, self.m):
+                    # Compute horizontal distance between clone i and j
                     d = sims[i].distance_to(sims[j])
+                    # If too close, penalize squared gap below minimum separation
                     if d < self.min_sep:
-                        sep_pen += (self.min_sep - d)**2
+                        sep_pen += (self.min_sep - d) ** 2
+        
+        # After simulating, penalize deviations from initial speeds
+        for s, init_s in zip(speeds, init_speeds):
+            fuel_pen += (s - init_s)**2
+        
         return self.sep_w * sep_pen + self.fuel_w * fuel_pen
 
     def optimize(self):
@@ -191,6 +212,7 @@ class Visualization:
         min_speed=50.0,
         max_speed=200.0,
         spawn_interval=2.0,
+        pso_interval=1.0,       # <-- add here
         time_scale=1.0,
         fps=60,
         min_sep=5000.0,
@@ -212,6 +234,10 @@ class Visualization:
         self.spawn_interval= spawn_interval
         self.time_scale   = time_scale
         self.fps          = fps
+        self.spawn_interval = spawn_interval
+        self.pso_interval   = pso_interval    
+        self._pso_timer     = 0.0
+        self.sim_time = 0.0
 
         self.min_speed  = min_speed
         self.max_speed  = max_speed
@@ -267,6 +293,8 @@ class Visualization:
         clock = pygame.time.Clock()
         self.aircraft_list = []
         spawn_timer = 0.0
+        self._pso_timer = 0.0
+        self.sim_time = 0.0
 
         running = True
         while running:
@@ -277,35 +305,47 @@ class Visualization:
                 if e.type == pygame.QUIT:
                     running = False
 
+            # Spawn logic
             spawn_timer += dt
             if spawn_timer >= self.spawn_interval:
                 self.spawn_aircraft()
                 spawn_timer = 0.0
 
-            # <-- GLOBAL PSO call -->
-            self.atc.communicate(self.aircraft_list, dt)
+            # PSO invocation every pso_interval seconds
+            self._pso_timer += dt
+            if self._pso_timer >= self.pso_interval:
+                self.atc.communicate(self.aircraft_list, dt)
+                self._pso_timer = 0.0
 
+            # Update aircraft
             for ac in self.aircraft_list[:]:
                 ac.update(dt)
                 if ac.is_finished():
                     self.aircraft_list.remove(ac)
+            
+            self.sim_time += dt
 
+            # Drawing
             self.screen.fill((255,255,255))
             self.draw_paths()
-            pygame.draw.circle(self.screen, (0,255,0), self.ils_px, self.ils_radius_px, 2)
+            # pygame.draw.circle(self.screen, (0,255,0), self.ils_px, self.ils_radius_px, 2)
 
             for ac in self.aircraft_list:
-                x,y = self._geo_to_px(ac.position.y, ac.position.x)
+                x, y = self._geo_to_px(ac.position.y, ac.position.x)
                 color = Visualization.PALETTE[ac.id % len(Visualization.PALETTE)]
                 pygame.draw.circle(self.screen, color, (x,y), 4)
                 lbl = self.font.render(f"{ac.id}|{ac.speed:.0f}", True, (0,0,0))
                 self.screen.blit(lbl, (x+6, y-6))
                 pygame.draw.circle(self.screen, color, (x,y), self.sep_radius_px, 1)
 
+            # render time in top-left corner
+            time_text = f"Time: {self.sim_time:.1f}s"
+            img = self.font.render(time_text, True, (0, 0, 0))
+            self.screen.blit(img, (10, 10))
+
             pygame.display.flip()
 
         pygame.quit()
-
 
 
 def runme(
@@ -313,35 +353,38 @@ def runme(
     width=1024,
     height=768,
     initial_speed=100.0,
-    acceleration=1.0,
-    min_speed=50.0,
-    max_speed=200.0,
-    spawn_interval=200.0,
+    acceleration=0.5,
+    min_speed=80.0,
+    max_speed=130.0,
+    spawn_interval=400.0,
+    pso_interval=200.0,        
     time_scale=100.0,
     fps=30,
     min_sep=3000.0,
-    sep_weight=500.0,
-    fuel_weight=0,
+    sep_weight=10,
+    fuel_weight=1,
     pso_particles=20,
     pso_w=0.5,
     pso_c1=1.2,
     pso_c2=1.2,
     pso_iters=20,
-    pso_horizon=40,
-    ils_radius_m=500000.0
+    pso_horizon=20,
+    ils_radius_m=400000.0
 ):
     sim = Visualization(
         paths_dict,
         width, height,
         initial_speed, acceleration,
         min_speed, max_speed,
-        spawn_interval, time_scale, fps,
+        spawn_interval, pso_interval,
+        time_scale, fps,
         min_sep, sep_weight, fuel_weight,
         pso_particles, pso_w, pso_c1, pso_c2,
         pso_iters, pso_horizon,
         ils_radius_m
     )
     sim.run()
+
 
 if __name__ == '__main__':
     from paths import paths_dict
