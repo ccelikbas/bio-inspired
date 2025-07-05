@@ -204,34 +204,44 @@ class ATCAgent:
     def __init__(self,
                  min_speed, max_speed, accel,
                  min_sep, sep_weight, fuel_weight,
-                 particles, w, c1, c2, iters, horizon,
-                 local_comm_radius=20000.0,   # e.g. 4× min_sep
-                local_horizon=40,             # short look-ahead for local PSO
-                local_sep_weight=10000.0):    # heavy separation penalty
-        self.min_speed   = min_speed
-        self.max_speed   = max_speed
-        self.accel       = accel
-        self.min_sep     = min_sep
-        self.sep_weight  = sep_weight
-        self.fuel_weight = fuel_weight
-        self.local_comm_radius = local_comm_radius
-        self.local_horizon     = local_horizon
-        self.local_sep_weight  = local_sep_weight
+                 particles, w, c1, c2, iters,
+                 global_horizon, global_step_skip,
+                 local_comm_radius, local_horizon, local_sep_weight):
+        """
+        - global_horizon:    # of discrete steps to look ahead in the GLOBAL PSO
+        - global_step_skip:  sample interval (in steps) when simulating cost
+                             (sparsifies separation checks)
+        - local_comm_radius: radius (m) within which to form LOCAL clusters
+        - local_horizon:     # of steps to look ahead in each LOCAL PSO
+        - local_sep_weight:  separation‐penalty weight used in LOCAL PSO
+        """
+        self.min_speed          = min_speed
+        self.max_speed          = max_speed
+        self.accel              = accel
+        self.min_sep            = min_sep
+        self.sep_weight         = sep_weight
+        self.fuel_weight        = fuel_weight
 
-        self.particles = particles
-        self.w         = w
-        self.c1        = c1
-        self.c2        = c2
-        self.iters     = iters
-        self.horizon   = horizon
+        self.particles          = particles
+        self.w                  = w
+        self.c1                 = c1
+        self.c2                 = c2
+        self.iters              = iters
+
+        self.global_horizon     = global_horizon
+        self.global_step_skip   = global_step_skip
+
+        self.local_comm_radius  = local_comm_radius
+        self.local_horizon      = local_horizon
+        self.local_sep_weight   = local_sep_weight
 
     def communicate(self, aircraft_list, dt):
-        # 1) pick unfinished aircraft
+        # 1) select only unfinished aircraft
         acs = [ac for ac in aircraft_list if not ac.is_finished()]
         if len(acs) < 2:
             return
 
-        # 2) Global PSO over everyone for long horizon
+        # 2) GLOBAL PSO over all ACs
         global_pso = GlobalPSO(
             acs,
             self.min_speed, self.max_speed,
@@ -240,30 +250,28 @@ class ATCAgent:
             self.particles,
             self.w, self.c1, self.c2,
             self.iters,
-            horizon_steps=self.horizon
+            horizon_steps=self.global_horizon,
+            step_skip=self.global_step_skip
         )
         global_speeds = global_pso.optimize()
-        # apply global plan
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
 
-        # 3) Local PSO for any nearby clusters
+        # 3) LOCAL PSO on any clusters within local_comm_radius
         clusters = _find_clusters(acs, self.local_comm_radius)
         for cluster in clusters:
-            # run a short‐horizon, high‐sep PSO on just that cluster
             local_pso = GlobalPSO(
                 cluster,
                 self.min_speed, self.max_speed,
                 dt, self.min_sep,
                 self.local_sep_weight, self.fuel_weight,
-                max(10, len(cluster)*2),  # a few particles
+                max(10, len(cluster)*2),
                 self.w, self.c1, self.c2,
                 self.iters,
                 horizon_steps=self.local_horizon,
-                step_skip=1               # no skipping in short horizon
+                step_skip=1
             )
             local_speeds = local_pso.optimize()
-            # override only these cluster members
             for ac, s in zip(cluster, local_speeds):
                 ac.set_target_speed(s)
 
@@ -284,60 +292,66 @@ class Visualization:
         paths_dict,
         width=800,
         height=600,
-        initial_speed=100.0,
-        acceleration=1.0,
-        min_speed=50.0,
-        max_speed=200.0,
-        spawn_interval=2.0,
-        pso_interval=1.0,       # <-- add here
-        time_scale=1.0,
-        fps=60,
-        min_sep=5000.0,
-        sep_weight=1000.0,
-        fuel_weight=1.0,
-        pso_particles=10,
-        pso_w=0.5,
-        pso_c1=1.2,
-        pso_c2=1.2,
-        pso_iters=20,
-        pso_horizon=10,
-        ils_radius_m=10000.0
+        initial_speed=100.0,      # m/s at spawn
+        acceleration=1.0,         # m/s² accel/decel
+        min_speed=50.0,           # m/s lower bound
+        max_speed=200.0,          # m/s upper bound
+        spawn_interval=2.0,       # s between new AC spawns
+        pso_interval=1.0,         # s between ATC replans
+        time_scale=1.0,           # sim_time = real_dt * time_scale
+        fps=60,                   # display frames per second
+        min_sep=5000.0,           # m safety distance
+        sep_weight=1000.0,        # global PSO sep‐penalty
+        fuel_weight=1.0,          # global PSO vel‐penalty
+        pso_particles=10,         # swarm size
+        pso_w=0.5,                # PSO inertia
+        pso_c1=1.2,               # PSO cognitive
+        pso_c2=1.2,               # PSO social
+        pso_iters=20,             # global PSO iterations
+        horizon_steps=800,        # global PSO look‐ahead steps
+        step_skip=15,             # sample every N steps in global sim
+        local_comm_radius=20000,  # m: range for local clusters
+        local_horizon=40,         # local PSO look‐ahead steps
+        local_sep_weight=10000.0, # sep‐penalty in local PSO
+        ils_radius_m=10000.0      # m, for ILS circle drawing
     ):
-        # store params…
-        self.paths = paths_dict
+        # store for drawing & spawn logic
+        self.paths           = paths_dict
         self.width, self.height = width, height
-        self.initial_speed = initial_speed
-        self.acceleration  = acceleration
-        self.spawn_interval= spawn_interval
-        self.time_scale   = time_scale
-        self.fps          = fps
-        self.spawn_interval = spawn_interval
-        self.pso_interval   = pso_interval    
-        self._pso_timer     = 0.0
-        self.sim_time = 0.0
+        self.initial_speed   = initial_speed
+        self.acceleration    = acceleration
+        self.spawn_interval  = spawn_interval
+        self.time_scale      = time_scale
+        self.fps             = fps
+        self.pso_interval    = pso_interval
 
-        self.min_speed  = min_speed
-        self.max_speed  = max_speed
-        self.min_sep    = min_sep
-        self.sep_weight = sep_weight
-        self.fuel_weight= fuel_weight
+        # separation & PSO parameters
+        self.min_speed       = min_speed
+        self.max_speed       = max_speed
+        self.min_sep         = min_sep
+        self.sep_weight      = sep_weight
+        self.fuel_weight     = fuel_weight
 
-        # Global PSO ATC
+        # build the combined ATC agent
         self.atc = ATCAgent(
             min_speed, max_speed, acceleration,
             min_sep, sep_weight, fuel_weight,
-            pso_particles, pso_w, pso_c1, pso_c2,
-            pso_iters, pso_horizon
+            pso_particles, pso_w, pso_c1, pso_c2, pso_iters,
+            global_horizon=horizon_steps,
+            global_step_skip=step_skip,
+            local_comm_radius=local_comm_radius,
+            local_horizon=local_horizon,
+            local_sep_weight=local_sep_weight
         )
 
-        # compute drawing scales…
+        # drawing scale
         all_lats = [pt[0] for p in paths_dict.values() for pt in p]
         all_lons = [pt[1] for p in paths_dict.values() for pt in p]
         self.lat_min, self.lat_max = min(all_lats), max(all_lats)
         self.lon_min, self.lon_max = min(all_lons), max(all_lons)
-        self.px_per_deg = self.width / (self.lon_max - self.lon_min)
+        self.px_per_deg    = width / (self.lon_max - self.lon_min)
         self.sep_radius_px = int((min_sep / M_PER_DEG) * self.px_per_deg)
-        self.ils_px = self._geo_to_px(self.ILS_LAT, self.ILS_LON)
+        self.ils_px        = self._geo_to_px(self.ILS_LAT, self.ILS_LON)
         self.ils_radius_px = int((ils_radius_m / M_PER_DEG) * self.px_per_deg)
 
         pygame.init()
@@ -418,12 +432,20 @@ class Visualization:
             # Draw each aircraft in red if in conflict, or black otherwise
             for ac in self.aircraft_list:
                 x, y = self._geo_to_px(ac.position.y, ac.position.x)
-                # override default palette:
                 color = (255, 0, 0) if ac.id in conflict_ids else (0, 0, 0)
+
+                # draw the aircraft dot
                 pygame.draw.circle(self.screen, color, (x, y), 4)
-                lbl = self.font.render(f"{ac.id}|{ac.speed:.0f}", True, color)
-                self.screen.blit(lbl, (x+6, y-6))
+
+                # render label and blit it *below* the dot, centered
+                lbl = self.font.render(f"{ac.id} | {ac.speed:.0f}", True, color)
+                label_x = x + 10
+                label_y = y + 6   # 6 pixels below the center of the dot
+                self.screen.blit(lbl, (label_x, label_y))
+
+                # draw the separation circle
                 pygame.draw.circle(self.screen, color, (x, y), self.sep_radius_px, 1)
+
 
             # render time in top-left corner
             time_text = f"Time: {self.sim_time:.1f}s"
@@ -439,25 +461,32 @@ def runme(
     paths_dict,
     width=1024,
     height=768,
-    initial_speed=100.0,
-    acceleration=0.5,
-    min_speed=80.0,
-    max_speed=130.0,
-    spawn_interval=400.0,
-    pso_interval=200.0,        
-    time_scale=100.0,
-    fps=30,
-    min_sep=3000.0,
-    sep_weight=10,
-    fuel_weight=1,
-    pso_particles=20,
-    pso_w=0.5,
-    pso_c1=1.2,
-    pso_c2=1.2,
-    pso_iters=20,
-    pso_horizon=800,
-    ils_radius_m=400000.0
+    initial_speed=100.0,      # m/s spawn speed
+    acceleration=0.5,         # m/s² accel/decel
+    min_speed=80.0,           # m/s lower bound
+    max_speed=130.0,          # m/s upper bound
+    spawn_interval=400.0,     # s between new AC
+    pso_interval=200.0,       # s between replans
+    time_scale=100.0,         # real-to-sim time
+    fps=30,                   # display FPS
+    min_sep=3000.0,           # m safety distance
+    sep_weight=10,            # global sep penalty weight
+    fuel_weight=1,            # global vel penalty weight
+    pso_particles=20,         # swarm size
+    pso_w=0.5,                # PSO inertia
+    pso_c1=1.2,               # PSO cognitive
+    pso_c2=1.2,               # PSO social
+    pso_iters=20,             # PSO iterations
+    horizon_steps=800,        # global look-ahead steps
+    step_skip=15,             # sample interval in global sim
+    local_comm_radius=20000,  # m: local cluster radius
+    local_horizon=40,         # steps in local look-ahead
+    local_sep_weight=10000.0, # sep-penalty weight in local PSO
+    ils_radius_m=400000.0     # m, ILS circle for drawing
 ):
+    """
+    All five new parameters are here and documented above.
+    """
     sim = Visualization(
         paths_dict,
         width, height,
@@ -467,7 +496,9 @@ def runme(
         time_scale, fps,
         min_sep, sep_weight, fuel_weight,
         pso_particles, pso_w, pso_c1, pso_c2,
-        pso_iters, pso_horizon,
+        pso_iters,
+        horizon_steps, step_skip,
+        local_comm_radius, local_horizon, local_sep_weight,
         ils_radius_m
     )
     sim.run()
