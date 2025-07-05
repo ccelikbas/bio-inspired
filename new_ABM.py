@@ -71,6 +71,8 @@ class Aircraft:
         return self.segment >= len(self.path) - 1
 
 
+import time
+
 class GlobalPSO:
     def __init__(self, aircraft_list, min_speed, max_speed, dt, min_sep,
                  sep_weight, fuel_weight,
@@ -101,6 +103,57 @@ class GlobalPSO:
         speeds: candidate speeds for each aircraft
         return: weighted sum of penalties
         """
+        # # --- profile timers ---
+        # t0 = time.perf_counter()
+
+        # # 1. Deep-copy each aircraft
+        # sims = [copy.deepcopy(ac) for ac in self.acs]
+        # t_copy = time.perf_counter()
+
+        # sep_pen = fuel_pen = 0.0 
+        # # record initial speeds for velocity‐penalty
+        # init_speeds = [ac.speed for ac in sims]
+
+        # # 2. Main simulation loop
+        # t_sim = 0.0
+        # for _ in range(self.horizon):
+        #     step_start = time.perf_counter()
+        #     # a) apply speeds & update positions
+        #     for ac, s in zip(sims, speeds):
+        #         ac.speed = np.clip(s, ac.min_speed, ac.max_speed)
+        #         ac.update(self.dt)
+        #     t_after_move = time.perf_counter()
+
+        #     # b) separation checks
+        #     for i in range(self.m):
+        #         for j in range(i+1, self.m):
+        #             d = sims[i].distance_to(sims[j])
+        #             if d < self.min_sep:
+        #                 sep_pen += (self.min_sep - d)**2
+        #     t_after_sep = time.perf_counter()
+
+        #     # accumulate simulation loop time
+        #     t_sim += (t_after_move - step_start) + (t_after_sep - t_after_move)
+
+        # # 3. Velocity‐deviation penalty
+        # fuel_pen = sum((s - init_s)**2 for s, init_s in zip(speeds, init_speeds))
+        # t_vel = time.perf_counter()
+
+        # cost = self.sep_w * sep_pen + self.fuel_w * fuel_pen
+        # t_end = time.perf_counter()
+
+        # print({
+        #         'copy_time':      t_copy - t0,
+        #         'move_time':      (t_after_move - t0) - (t_copy - t0) if False else t_after_move - t_copy,
+        #         'sep_time':       t_after_sep - t_after_move,
+        #         'vel_pen_time':   t_vel - t_after_sep,
+        #         'total_time':     t_end - t0,
+        #         'simulate_steps': self.horizon,
+        #         'pair_checks':    self.horizon * (self.m*(self.m-1)//2)
+        #     })
+
+        # return cost
+
         # Record each aircraft’s starting speed
         init_speeds = [ac.speed for ac in self.acs]
 
@@ -108,7 +161,7 @@ class GlobalPSO:
         sep_pen = fuel_pen = 0.0
         
         # Simulate for a fixed number of time steps
-        for _ in range(self.horizon):
+        for t in range(self.horizon):
             # Apply candidate speeds 
             for ac, s in zip(sims, speeds):
                 # Clip to aircraft's allowable speed bounds
@@ -117,13 +170,16 @@ class GlobalPSO:
                 ac.update(self.dt)
             
             # After moving, check every pair for separation violations
-            for i in range(self.m):
-                for j in range(i + 1, self.m):
-                    # Compute horizontal distance between clone i and j
-                    d = sims[i].distance_to(sims[j])
-                    # If too close, penalize squared gap below minimum separation
-                    if d < self.min_sep:
-                        sep_pen += (self.min_sep - d) ** 2
+            
+            # Conflict check only every 50 steps
+            if t % 50 == 0:
+                for i in range(self.m):
+                    for j in range(i + 1, self.m):
+                        # Compute horizontal distance between clone i and j
+                        d = sims[i].distance_to(sims[j])
+                        # If too close, penalize squared gap below minimum separation
+                        if d < self.min_sep:
+                            sep_pen += (self.min_sep - d) ** 2
         
         # After simulating, penalize deviations from initial speeds
         for s, init_s in zip(speeds, init_speeds):
@@ -368,7 +424,7 @@ def runme(
     pso_c1=1.2,
     pso_c2=1.2,
     pso_iters=20,
-    pso_horizon=20,
+    pso_horizon=420,
     ils_radius_m=400000.0
 ):
     sim = Visualization(
