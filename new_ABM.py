@@ -3,6 +3,7 @@ import random
 import numpy as np
 import copy
 import bisect
+from paths import paths_dict
 
 # approximate meters per degree latitude/longitude around Amsterdam
 M_PER_DEG = 111320
@@ -275,235 +276,214 @@ class ATCAgent:
             for ac, s in zip(cluster, local_speeds):
                 ac.set_target_speed(s)
 
-
 class Visualization:
-    ILS_LAT = 52.33080945036779
-    ILS_LON = 5.32394574767848
-
-    PALETTE = [
-        (255,   0,   0), (  0, 255,   0), (  0,   0, 255),
-        (255, 255,   0), (255,   0, 255), (  0, 255, 255),
-        (128,   0, 128), (255, 165,   0), (  0, 128, 128),
-        (128, 128,   0),
-    ]
-
-    def __init__(
-        self,
-        paths_dict,
-        width=800,
-        height=600,
-        initial_speed=100.0,      # m/s at spawn
-        acceleration=1.0,         # m/s² accel/decel
-        min_speed=50.0,           # m/s lower bound
-        max_speed=200.0,          # m/s upper bound
-        spawn_interval=2.0,       # s between new AC spawns
-        pso_interval=1.0,         # s between ATC replans
-        time_scale=1.0,           # sim_time = real_dt * time_scale
-        fps=60,                   # display frames per second
-        min_sep=5000.0,           # m safety distance
-        sep_weight=1000.0,        # global PSO sep‐penalty
-        fuel_weight=1.0,          # global PSO vel‐penalty
-        pso_particles=10,         # swarm size
-        pso_w=0.5,                # PSO inertia
-        pso_c1=1.2,               # PSO cognitive
-        pso_c2=1.2,               # PSO social
-        pso_iters=20,             # global PSO iterations
-        horizon_steps=800,        # global PSO look‐ahead steps
-        step_skip=15,             # sample every N steps in global sim
-        local_comm_radius=20000,  # m: range for local clusters
-        local_horizon=40,         # local PSO look‐ahead steps
-        local_sep_weight=10000.0, # sep‐penalty in local PSO
-        ils_radius_m=10000.0      # m, for ILS circle drawing
-    ):
-        # store for drawing & spawn logic
-        self.paths           = paths_dict
-        self.width, self.height = width, height
-        self.initial_speed   = initial_speed
-        self.acceleration    = acceleration
-        self.spawn_interval  = spawn_interval
-        self.time_scale      = time_scale
-        self.fps             = fps
-        self.pso_interval    = pso_interval
-
-        # separation & PSO parameters
-        self.min_speed       = min_speed
-        self.max_speed       = max_speed
-        self.min_sep         = min_sep
-        self.sep_weight      = sep_weight
-        self.fuel_weight     = fuel_weight
-
-        # build the combined ATC agent
-        self.atc = ATCAgent(
-            min_speed, max_speed, acceleration,
-            min_sep, sep_weight, fuel_weight,
-            pso_particles, pso_w, pso_c1, pso_c2, pso_iters,
-            global_horizon=horizon_steps,
-            global_step_skip=step_skip,
-            local_comm_radius=local_comm_radius,
-            local_horizon=local_horizon,
-            local_sep_weight=local_sep_weight
-        )
-
-        # drawing scale
-        all_lats = [pt[0] for p in paths_dict.values() for pt in p]
-        all_lons = [pt[1] for p in paths_dict.values() for pt in p]
-        self.lat_min, self.lat_max = min(all_lats), max(all_lats)
-        self.lon_min, self.lon_max = min(all_lons), max(all_lons)
-        self.px_per_deg    = width / (self.lon_max - self.lon_min)
-        self.sep_radius_px = int((min_sep / M_PER_DEG) * self.px_per_deg)
-        self.ils_px        = self._geo_to_px(self.ILS_LAT, self.ILS_LON)
-        self.ils_radius_px = int((ils_radius_m / M_PER_DEG) * self.px_per_deg)
-
-        pygame.init()
-        self.screen = pygame.display.set_mode((width, height))
-        self.font   = pygame.font.SysFont(None, 20)
-
-
-    def _geo_to_px(self, lat, lon):
-        x = (lon - self.lon_min) / (self.lon_max - self.lon_min) * self.width
-        y = self.height - (lat - self.lat_min) / (self.lat_max - self.lat_min) * self.height
-        return int(x), int(y)
-
-    def draw_paths(self):
-        active = {ac.path_id for ac in self.aircraft_list}
+    ILS_LAT,ILS_LON=52.33080945036779,5.32394574767848
+    
+    PALETTE=[(255,0,0),(0,255,0),(0,0,255),(255,255,0),(255,0,255),(0,255,255),
+             (128,0,128),(255,165,0),(0,128,128),(128,128,0)]
+    
+    def __init__(self,paths_dict,width,height,min_sep):
+        self.paths=paths_dict; self.width,self.height=width,height; self.min_sep=min_sep
+        self.lat_min=min(lat for p in paths_dict.values() for lat,lon in p)
+        self.lat_max=max(lat for p in paths_dict.values() for lat,lon in p)
+        self.lon_min=min(lon for p in paths_dict.values() for lat,lon in p)
+        self.lon_max=max(lon for p in paths_dict.values() for lat,lon in p)
+        self.sep_radius_px=int(min_sep/M_PER_DEG*(width/(self.lon_max-self.lon_min)))
+        pygame.init(); self.screen=pygame.display.set_mode((width,height))
+        self.font=pygame.font.SysFont(None,20); self.aircraft_list=[]
+    
+    def _geo_to_px(self,lat,lon):
+        x=(lon-self.lon_min)/(self.lon_max-self.lon_min)*self.width
+        y=self.height-(lat-self.lat_min)/(self.lat_max-self.lat_min)*self.height
+        return int(x),int(y)
+    
+    def draw(self,sim_time):
+        self.screen.fill((255,255,255))
+        # draw paths
+        active={ac.path_id for ac in self.aircraft_list}
         for pid in active:
-            pts = [self._geo_to_px(lat, lon) for lat, lon in self.paths[pid]]
-            if len(pts) > 1:
-                pygame.draw.lines(self.screen, (200, 200, 200), False, pts, 2)
-
-    def spawn_aircraft(self):
-        pid, path = random.choice(list(self.paths.items()))
-        ac = Aircraft(
-            pid, path,
-            self.initial_speed, self.acceleration,
-            self.min_speed, self.max_speed
-        )
-        self.aircraft_list.append(ac)
-
-    def run(self):
-        clock = pygame.time.Clock()
-        self.aircraft_list = []
-        spawn_timer = 0.0
-        self._pso_timer = 0.0
-        self.sim_time = 0.0
-
-        running = True
-        while running:
-            raw_dt = clock.tick(self.fps) / 1000.0
-            dt = raw_dt * self.time_scale
-
-            for e in pygame.event.get():
-                if e.type == pygame.QUIT:
-                    running = False
-
-            # Spawn logic
-            spawn_timer += dt
-            if spawn_timer >= self.spawn_interval:
-                self.spawn_aircraft()
-                spawn_timer = 0.0
-
-            # PSO invocation every pso_interval seconds
-            self._pso_timer += dt
-            if self._pso_timer >= self.pso_interval:
-                self.atc.communicate(self.aircraft_list, dt)
-                self._pso_timer = 0.0
-
-            # Update aircraft
-            for ac in self.aircraft_list[:]:
-                ac.update(dt)
-                if ac.is_finished():
-                    self.aircraft_list.remove(ac)
+            pts=[self._geo_to_px(lat,lon) for lat,lon in self.paths[pid]]
+            if len(pts)>1: pygame.draw.lines(self.screen,(200,200,200),False,pts,2)
+        
+        # clusters and conflicts
+        clusters=_find_clusters(self.aircraft_list,self.sep_radius_px*M_PER_DEG/self.width*(self.lon_max-self.lon_min))
+        
+        cmap={ac.id:i for i,cl in enumerate(clusters) for ac in cl}
+        
+        conflicts={ac.id for i,ac in enumerate(self.aircraft_list)
+                   for other in self.aircraft_list[i+1:]
+                   if ac.distance_to(other)<self.min_sep}
+        
+        for ac in self.aircraft_list:
+            x,y=self._geo_to_px(ac.position.y,ac.position.x)
+            if ac.id in conflicts: 
+                color=(255,0,0)
+            elif ac.id in cmap: 
+                color=Visualization.PALETTE[cmap[ac.id]%len(Visualization.PALETTE)]
+            else: 
+                color=(0,0,0)
             
-            self.sim_time += dt
+            pygame.draw.circle(self.screen,color,(x,y),4)
+            
+            lbl=self.font.render(f"{ac.id}|{ac.speed:.0f}",True,color)
+            
+            self.screen.blit(lbl,(x+10,y+6))
 
-            # Drawing
-            self.screen.fill((255,255,255))
-            self.draw_paths()
-            # pygame.draw.circle(self.screen, (0,255,0), self.ils_px, self.ils_radius_px, 2)
+            pygame.draw.circle(self.screen,color,(x,y),self.sep_radius_px,1)
 
-            # Find any aircraft pairs closer than min_sep
-            conflict_ids = set()
-            for i, ac1 in enumerate(self.aircraft_list):
-                for ac2 in self.aircraft_list[i+1:]:
-                    if ac1.distance_to(ac2) < self.min_sep:
-                        conflict_ids.add(ac1.id)
-                        conflict_ids.add(ac2.id)
-
-            # Draw each aircraft in red if in conflict, or black otherwise
-            for ac in self.aircraft_list:
-                x, y = self._geo_to_px(ac.position.y, ac.position.x)
-                color = (255, 0, 0) if ac.id in conflict_ids else (0, 0, 0)
-
-                # draw the aircraft dot
-                pygame.draw.circle(self.screen, color, (x, y), 4)
-
-                # render label and blit it *below* the dot, centered
-                lbl = self.font.render(f"{ac.id} | {ac.speed:.0f}", True, color)
-                label_x = x + 10
-                label_y = y + 6   # 6 pixels below the center of the dot
-                self.screen.blit(lbl, (label_x, label_y))
-
-                # draw the separation circle
-                pygame.draw.circle(self.screen, color, (x, y), self.sep_radius_px, 1)
+        timg=self.font.render(f"Time:{sim_time:.1f}s",True,(0,0,0))
+        self.screen.blit(timg,(10,10)); pygame.display.flip()
 
 
-            # render time in top-left corner
-            time_text = f"Time: {self.sim_time:.1f}s"
-            img = self.font.render(time_text, True, (0, 0, 0))
-            self.screen.blit(img, (10, 10))
-
-            pygame.display.flip()
-
-        pygame.quit()
 
 
-def runme(
-    paths_dict,
-    width=1024,
-    height=768,
-    initial_speed=100.0,      # m/s spawn speed
-    acceleration=0.5,         # m/s² accel/decel
-    min_speed=80.0,           # m/s lower bound
-    max_speed=130.0,          # m/s upper bound
-    spawn_interval=400.0,     # s between new AC
-    pso_interval=200.0,       # s between replans
-    time_scale=100.0,         # real-to-sim time
-    fps=30,                   # display FPS
-    min_sep=3000.0,           # m safety distance
-    sep_weight=10,            # global sep penalty weight
-    fuel_weight=1,            # global vel penalty weight
-    pso_particles=20,         # swarm size
-    pso_w=0.5,                # PSO inertia
-    pso_c1=1.2,               # PSO cognitive
-    pso_c2=1.2,               # PSO social
-    pso_iters=20,             # PSO iterations
-    horizon_steps=800,        # global look-ahead steps
-    step_skip=15,             # sample interval in global sim
-    local_comm_radius=20000,  # m: local cluster radius
-    local_horizon=40,         # steps in local look-ahead
-    local_sep_weight=10000.0, # sep-penalty weight in local PSO
-    ils_radius_m=400000.0     # m, ILS circle for drawing
-):
-    """
-    All five new parameters are here and documented above.
-    """
-    sim = Visualization(
-        paths_dict,
-        width, height,
-        initial_speed, acceleration,
-        min_speed, max_speed,
-        spawn_interval, pso_interval,
-        time_scale, fps,
-        min_sep, sep_weight, fuel_weight,
-        pso_particles, pso_w, pso_c1, pso_c2,
-        pso_iters,
-        horizon_steps, step_skip,
-        local_comm_radius, local_horizon, local_sep_weight,
-        ils_radius_m
-    )
-    sim.run()
-
+def runme(paths_dict, 
+          sim_duration=3600.0, 
+          visualize=True,
+          width=1024,
+          height=768,
+          initial_speed=100.0,
+          acceleration=0.5,
+          min_speed=80.0,
+          max_speed=130.0,
+          spawn_interval=400.0,
+          pso_interval=50.0, # global PSO 
+          time_scale=100.0,
+          fps=30,
+          
+          # Global PSO 
+          min_sep=3000.0,
+          sep_weight=100,
+          fuel_weight=1,
+          pso_particles=12,
+          pso_w=0.5,
+          pso_c1=1.2,
+          pso_c2=1.2,
+          pso_iters=12,
+          horizon_steps=3000,
+          step_skip=20,
+          
+          # Local PSO 
+          local_comm_radius=20000,
+          local_horizon=40,
+          local_sep_weight=10000.0,
+          ils_radius_m=400000.0):
+    
+    atc=ATCAgent(min_speed,max_speed,acceleration,min_sep,sep_weight,
+                  fuel_weight,pso_particles,pso_w,pso_c1,pso_c2,pso_iters,
+                  horizon_steps,step_skip,local_comm_radius,local_horizon,local_sep_weight)
+    
+    aircraft_list=[]; spawn_t=pso_t=sim_t=0.0; collisions=throughput=0
+    
+    if visualize:
+        viz=Visualization(paths_dict,width,height,min_sep); clock=pygame.time.Clock()
+    
+    while sim_t<sim_duration:
+        raw=clock.tick(fps)/1000.0 if visualize else 1.0/fps
+        dt=raw*time_scale
+        
+        if visualize:
+            for e in pygame.event.get():
+                if e.type==pygame.QUIT: sim_t=sim_duration; break
+        spawn_t+=dt
+        
+        if spawn_t>=spawn_interval:
+            pid,path=random.choice(list(paths_dict.items()))
+            aircraft_list.append(Aircraft(pid,path,initial_speed,acceleration,min_speed,max_speed))
+            spawn_t-=spawn_interval
+        pso_t+=dt
+        
+        if pso_t>=pso_interval:
+            atc.communicate(aircraft_list,dt); pso_t-=pso_interval
+        
+        for ac in aircraft_list[:]:
+            ac.update(dt)
+            if ac.is_finished(): aircraft_list.remove(ac); throughput+=1
+        
+        for i,ac1 in enumerate(aircraft_list):
+            for ac2 in aircraft_list[i+1:]:
+                if ac1.distance_to(ac2)<min_sep: collisions+=1
+        
+        if visualize:
+            viz.aircraft_list=aircraft_list; viz.draw(sim_t)
+        sim_t+=dt
+    
+    if visualize: pygame.quit()
+    
+    return {'collisions':collisions,'throughput':throughput}
 
 if __name__ == '__main__':
-    from paths import paths_dict
-    runme(paths_dict)
+    import time
+    # use a high-resolution monotonic clock
+    start_time = time.perf_counter()
+    kpi_summary = runme(
+        paths_dict,
+        sim_duration=10000.0,
+        visualize=True
+    )
+    end_time = time.perf_counter()
+    elapsed = end_time - start_time
+    print(kpi_summary)
+    print(f"Elapsed time: {elapsed:.3f} seconds")
+
+
+
+# def runme(
+#     paths_dict,
+#     width=1024,
+#     height=768,
+#     initial_speed=100.0,      # m/s spawn speed
+#     acceleration=0.5,         # m/s² accel/decel
+#     min_speed=80.0,           # m/s lower bound
+#     max_speed=130.0,          # m/s upper bound
+#     spawn_interval=400.0,     # s between new AC
+    
+#     pso_interval=50.0,       # s between replans
+#     time_scale=50.0,         # real-to-sim time
+#     fps=30,                   # display FPS
+#     min_sep=3000.0,           # m safety distance
+    
+#     # Global PSO 
+#     sep_weight=100,           # global sep penalty weight
+#     fuel_weight=1,            # global vel penalty weight
+#     pso_particles=12,         # swarm size
+#     pso_w=0.5,                # PSO inertia
+#     pso_c1=1.2,               # PSO cognitive
+#     pso_c2=1.2,               # PSO social
+#     pso_iters=12,             # PSO iterations
+#     horizon_steps=2000,        # global look-ahead steps
+#     step_skip=10,             # sample interval in global sim
+    
+#     # Local PSO adaptations
+#     local_comm_radius=20000,  # m: local cluster radius
+#     local_horizon=40,         # steps in local look-ahead
+#     local_sep_weight=10000.0, # sep-penalty weight in local PSO
+#     ils_radius_m=400000.0     
+# ):
+#     """
+#     All five new parameters are here and documented above.
+#     """
+#     sim = Visualization(
+#         paths_dict,
+#         width, height,
+#         initial_speed, acceleration,
+#         min_speed, max_speed,
+#         spawn_interval, pso_interval,
+#         time_scale, fps,
+#         min_sep, sep_weight, fuel_weight,
+#         pso_particles, pso_w, pso_c1, pso_c2,
+#         pso_iters,
+#         horizon_steps, step_skip,
+#         local_comm_radius, local_horizon, local_sep_weight,
+#         ils_radius_m
+#     )
+#     sim.run()
+
+
+# if __name__ == '__main__':
+#     from paths import paths_dict
+#     runme(paths_dict)
+
+
+
+#TODO: add simulation period & KPIS 
