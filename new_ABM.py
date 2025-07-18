@@ -258,13 +258,15 @@ class ATCAgent:
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
 
-        # 3) LOCAL PSO on any clusters within local_comm_radius
+        # 3) LOCAL PSO with ordering enforcement
         clusters = _find_clusters(acs, self.local_comm_radius)
         for cluster in clusters:
+            # run local PSO
             local_pso = GlobalPSO(
                 cluster,
                 self.min_speed, self.max_speed,
-                dt, self.min_sep,
+                dt,
+                self.min_sep,
                 self.local_sep_weight, self.fuel_weight,
                 max(10, len(cluster)*2),
                 self.w, self.c1, self.c2,
@@ -273,6 +275,45 @@ class ATCAgent:
                 step_skip=1
             )
             local_speeds = local_pso.optimize()
+
+            # compute current along-track distances
+            distances = []  # (index, distance)
+            for i, ac in enumerate(cluster):
+                cum = local_pso.path_cumlens[i]
+                pts = local_pso.path_pts[i]
+                seg = min(ac.segment, len(cum) - 1)
+                # base distance
+                d_base = cum[seg]
+                # fractional segment
+                if seg < len(pts) - 1:
+                    A, B = pts[seg], pts[seg + 1]
+                    seg_len = (cum[seg + 1] - cum[seg])
+                    # deg length
+                    deg_total = (B - A).length()
+                    if deg_total > 0:
+                        frac = (ac.position - A).length() / deg_total
+                    else:
+                        frac = 0.0
+                    d = d_base + frac * seg_len
+                else:
+                    d = d_base
+                distances.append((i, d))
+
+            # enforce ordering per path_id
+            # group by path
+            by_path = {}
+            for idx, ac in enumerate(cluster):
+                by_path.setdefault(ac.path_id, []).append(idx)
+            for path_id, indices in by_path.items():
+                # sort indices by distance descending (leader first)
+                sorted_idxs = sorted(indices, key=lambda i: distances[i][1], reverse=True)
+                # enforce non-increasing speeds
+                for j in range(1, len(sorted_idxs)):
+                    prev_i = sorted_idxs[j - 1]
+                    curr_i = sorted_idxs[j]
+                    local_speeds[curr_i] = min(local_speeds[curr_i], local_speeds[prev_i])
+
+            # apply speeds
             for ac, s in zip(cluster, local_speeds):
                 ac.set_target_speed(s)
 
@@ -282,7 +323,7 @@ class Visualization:
     PALETTE=[(255,0,0),(0,255,0),(0,0,255),(255,255,0),(255,0,255),(0,255,255),
              (128,0,128),(255,165,0),(0,128,128),(128,128,0)]
     
-    def __init__(self,paths_dict,width,height,min_sep):
+    def __init__(self,paths_dict,width,height,min_sep, local_comm_radius):
         self.paths=paths_dict; self.width,self.height=width,height; self.min_sep=min_sep
         self.lat_min=min(lat for p in paths_dict.values() for lat,lon in p)
         self.lat_max=max(lat for p in paths_dict.values() for lat,lon in p)
@@ -291,6 +332,8 @@ class Visualization:
         self.sep_radius_px=int(min_sep/M_PER_DEG*(width/(self.lon_max-self.lon_min)))
         pygame.init(); self.screen=pygame.display.set_mode((width,height))
         self.font=pygame.font.SysFont(None,20); self.aircraft_list=[]
+
+        self.local_comm_radius = local_comm_radius
     
     def _geo_to_px(self,lat,lon):
         x=(lon-self.lon_min)/(self.lon_max-self.lon_min)*self.width
@@ -306,7 +349,7 @@ class Visualization:
             if len(pts)>1: pygame.draw.lines(self.screen,(200,200,200),False,pts,2)
         
         # clusters and conflicts
-        clusters=_find_clusters(self.aircraft_list,self.sep_radius_px*M_PER_DEG/self.width*(self.lon_max-self.lon_min))
+        clusters = _find_clusters(self.aircraft_list, self.local_comm_radius)
         
         cmap={ac.id:i for i,cl in enumerate(clusters) for ac in cl}
         
@@ -319,7 +362,7 @@ class Visualization:
             if ac.id in conflicts: 
                 color=(255,0,0)
             elif ac.id in cmap: 
-                color=Visualization.PALETTE[cmap[ac.id]%len(Visualization.PALETTE)]
+                color = (0, 255, 0)
             else: 
                 color=(0,0,0)
             
@@ -345,7 +388,7 @@ def runme(paths_dict,
           initial_speed=100.0,
           acceleration=0.5,
           min_speed=80.0,
-          max_speed=130.0,
+          max_speed=120.0,
           spawn_interval=400.0,
           pso_interval=50.0, # global PSO 
           time_scale=100.0,
@@ -376,7 +419,7 @@ def runme(paths_dict,
     aircraft_list=[]; spawn_t=pso_t=sim_t=0.0; collisions=throughput=0
     
     if visualize:
-        viz=Visualization(paths_dict,width,height,min_sep); clock=pygame.time.Clock()
+        viz=Visualization(paths_dict,width,height,min_sep, local_comm_radius); clock=pygame.time.Clock()
     
     while sim_t<sim_duration:
         raw=clock.tick(fps)/1000.0 if visualize else 1.0/fps
@@ -412,6 +455,7 @@ def runme(paths_dict,
     
     return {'collisions':collisions,'throughput':throughput}
 
+
 if __name__ == '__main__':
     import time
     # use a high-resolution monotonic clock
@@ -419,6 +463,7 @@ if __name__ == '__main__':
     kpi_summary = runme(
         paths_dict,
         sim_duration=10000.0,
+        time_scale=100.0,
         visualize=True
     )
     end_time = time.perf_counter()
