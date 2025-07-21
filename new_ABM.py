@@ -266,15 +266,15 @@ class ATCAgent:
         )
         global_speeds = global_pso.optimize()
 
-        # # Plot PSO costs over itterations to check convergence
-        # plt.figure(figsize=(6,4))
-        # plt.plot(global_pso.history, marker='o')
-        # plt.xlabel("PSO iteration")
-        # plt.ylabel("Global best cost")
-        # plt.title("PSO convergence (single run)")
-        # plt.grid(True)
-        # plt.draw()
-        # plt.pause(0.001)
+        # Plot PSO costs over itterations to check convergence
+        plt.figure(figsize=(6,4))
+        plt.plot(global_pso.history, marker='o')
+        plt.xlabel("PSO iteration")
+        plt.ylabel("Global best cost")
+        plt.title("PSO convergence (single run)")
+        plt.grid(True)
+        plt.draw()
+        plt.pause(0.001)
 
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
@@ -297,14 +297,14 @@ class ATCAgent:
             local_speeds = local_pso.optimize()
             
             # Plot PSO costs over itterations to check convergence
-            plt.figure(figsize=(6,4))
-            plt.plot(local_pso.history, marker='o')
-            plt.xlabel("PSO iteration")
-            plt.ylabel("Local best cost")
-            plt.title("PSO convergence (single run)")
-            plt.grid(True)
-            plt.draw()
-            plt.pause(0.001)
+            # plt.figure(figsize=(6,4))
+            # plt.plot(local_pso.history, marker='o')
+            # plt.xlabel("PSO iteration")
+            # plt.ylabel("Local best cost")
+            # plt.title("PSO convergence (single run)")
+            # plt.grid(True)
+            # plt.draw()
+            # plt.pause(0.001)
             
             for ac, s in zip(cluster, local_speeds):
                 ac.set_target_speed(s)
