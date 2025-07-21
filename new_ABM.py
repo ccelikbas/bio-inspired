@@ -4,6 +4,8 @@ import numpy as np
 import copy
 import bisect
 from paths import paths_dict
+import matplotlib.pyplot as plt
+
 
 # approximate meters per degree latitude/longitude around Amsterdam
 M_PER_DEG = 111320
@@ -89,170 +91,7 @@ class Aircraft:
     def is_finished(self):
         return self.segment >= len(self.path) - 1
 
-class GlobalPSO:
-    def __init__(self, aircraft_list, min_speed, max_speed, dt, min_sep,
-                 sep_weight, fuel_weight,
-                 n_particles, w, c1, c2, max_iter,
-                 horizon_steps=3000, step_skip=15):
-        self.acs       = aircraft_list
-        self.m         = len(aircraft_list)
-        self.E         = np.full(self.m, min_speed)
-        self.L         = np.full(self.m, max_speed)
-        self.dt        = dt
-        self.min_sep   = min_sep
-        self.sep_w     = sep_weight
-        self.fuel_w    = fuel_weight
-        self.w, self.c1, self.c2 = w, c1, c2
-        self.max_iter  = max_iter
-        self.horizon   = horizon_steps
-        self.step_skip = step_skip
 
-        self.path_cumlens = []
-        self.path_pts     = []
-        for ac in self.acs:
-            pts = ac.path
-            dist = [0.0]
-            for A, B in zip(pts[:-1], pts[1:]):
-                mean_lat = np.deg2rad((A.y + B.y)/2)
-                dlat = (B.y - A.y)*M_PER_DEG
-                dlon = (B.x - A.x)*M_PER_DEG*np.cos(mean_lat)
-                dist.append(np.hypot(dlat, dlon))
-            cum = np.cumsum(dist)
-            self.path_cumlens.append(cum)
-            self.path_pts.append(pts)
-
-        self.X = np.random.uniform(self.E, self.L, (n_particles, self.m))
-        self.V = np.zeros_like(self.X)
-        self.pbest = self.X.copy()
-        self.pbest_cost = np.full(n_particles, np.inf)
-        self.gbest = None
-        self.gbest_cost = np.inf
-
-    # def _simulate_cost(self, speeds):
-    #     """
-    #     Simulate the trajectories of all aircraft under a given speed profile
-    #     and compute a combined cost based on separation violations and
-    #     deviation from current speeds.
-    #     """
-    #     # Record each aircraft's current speed for velocity‐deviation penalty
-    #     init_speeds = np.array([ac.speed for ac in self.acs])
-
-    #     sep_pen = 0.0
-    #     # Generate sample times t = 0, step_skip, 2*step_skip, ..., up to horizon
-    #     samples = np.arange(0, self.horizon + 1, self.step_skip)
-
-    #     # For each sample time, compute positions and accumulate separation penalties
-    #     for t in samples:
-    #         τ = t * self.dt                  # convert step index to real time
-    #         D = speeds * τ                   # distance traveled by each aircraft
-
-    #         positions = []
-    #         for i in range(self.m):
-    #             cum = self.path_cumlens[i]   # cumulative path lengths for aircraft i
-    #             pts = self.path_pts[i]       # waypoints for aircraft i
-    #             d = min(D[i], cum[-1])       # ensure we don't exceed end of path
-    #             idx = bisect.bisect_right(cum, d) - 1
-
-    #             # If past final segment, position is last waypoint
-    #             if idx >= len(pts) - 1:
-    #                 positions.append(pts[-1])
-    #             else:
-    #                 # Interpolate between waypoints A and B
-    #                 A, B = pts[idx], pts[idx + 1]
-    #                 seg_len = cum[idx + 1] - cum[idx]
-    #                 frac = (d - cum[idx]) / seg_len if seg_len > 0 else 0.0
-    #                 positions.append(A + (B - A) * frac)
-
-    #         # Pairwise separation checks: penalize squared violation depth
-    #         for i in range(self.m):
-    #             for j in range(i + 1, self.m):
-    #                 d_ij = positions[i].distance_to(positions[j])
-    #                 if d_ij < self.min_sep:
-    #                     sep_pen += (self.min_sep - d_ij) ** 2
-
-    #     # Penalize large changes from initial speeds (smoothness / fuel proxy)
-    #     vel_pen = np.sum((speeds - init_speeds) ** 2)
-
-    #     # Return weighted sum: separation_penalty * weight + velocity_penalty * weight
-    #     return self.sep_w * sep_pen + self.fuel_w * vel_pen
-
-    def _simulate_cost(self, speeds):
-        """
-        Simulate the trajectories of all aircraft under a given speed profile.
-        Impose a hard no-violation constraint: the first time any two aircraft
-        come closer than min_sep, bail out with infinite cost.
-        Otherwise return only the velocity-deviation penalty.
-        """
-        # record current speeds for the smoothness/fuel proxy
-        init_speeds = np.array([ac.speed for ac in self.acs])
-
-        # sample times t = 0, step_skip, 2*step_skip, ..., horizon
-        samples = np.arange(0, self.horizon + 1, self.step_skip)
-
-        for t in samples:
-            τ = t * self.dt
-            D = speeds * τ
-
-            # compute each aircraft's simulated position at time τ
-            positions = []
-            for i in range(self.m):
-                cum = self.path_cumlens[i]
-                pts = self.path_pts[i]
-                d = min(D[i], cum[-1])
-                idx = bisect.bisect_right(cum, d) - 1
-
-                if idx >= len(pts) - 1:
-                    positions.append(pts[-1])
-                else:
-                    A, B = pts[idx], pts[idx + 1]
-                    seg_len = cum[idx + 1] - cum[idx]
-                    frac = (d - cum[idx]) / seg_len if seg_len > 0 else 0.0
-                    positions.append(A + (B - A) * frac)
-
-            # HARD CONSTRAINT: if any pair violates min_sep, reject immediately
-            for i in range(self.m):
-                for j in range(i + 1, self.m):
-                    if positions[i].distance_to(positions[j]) < self.min_sep:
-                        return float('inf')
-
-        # if we made it through all samples with no breach,
-        # compute only the velocity‐deviation penalty:
-        vel_pen = np.sum((speeds - init_speeds) ** 2)
-        return self.fuel_w * vel_pen
-
-
-    # def optimize(self):
-    #     """
-    #     Run the Particle Swarm Optimization loop to find the best speed vector
-    #     """
-    #     nP = self.X.shape[0]  # number of particles in swarm
-
-    #     # Repeat for a fixed number of PSO iterations
-    #     for _ in range(self.max_iter):
-    #         # Evaluate and update personal & global bests
-    #         for k in range(nP):
-    #             cost = self._simulate_cost(self.X[k])
-    #             # Update personal best for particle k
-    #             if cost < self.pbest_cost[k]:
-    #                 self.pbest_cost[k] = cost
-    #                 self.pbest[k] = self.X[k].copy()
-    #             # Update global best if this particle is best so far
-    #             if cost < self.gbest_cost:
-    #                 self.gbest_cost = cost
-    #                 self.gbest = self.X[k].copy()
-
-    #         # PSO velocity and position update step
-    #         r1, r2 = np.random.rand(nP, self.m), np.random.rand(nP, self.m)
-    #         self.V = (
-    #             self.w * self.V
-    #             + self.c1 * r1 * (self.pbest - self.X)
-    #             + self.c2 * r2 * (self.gbest - self.X)
-    #         )
-    #         # Move particles and clamp within [min_speed, max_speed]
-    #         self.X = np.clip(self.X + self.V, self.E, self.L)
-
-    #     # Return the best speed profile found
-    #     return self.gbest.copy()
 
 class GlobalPSO:
     def __init__(self, aircraft_list, min_speed, max_speed, dt, min_sep,
@@ -299,12 +138,13 @@ class GlobalPSO:
 
     def _simulate_cost(self, speeds):
         """
-        Simulate all aircraft at fixed speeds and return a cost.
-        Hard‐constraint: if any separation breach, return inf immediately.
-        Otherwise cost = velocity‐deviation penalty only.
+        Simulate trajectories under `speeds`.  
+        Enforce separation only after the first interval, so t=0 is ignored.
         """
         init_speeds = np.array([ac.speed for ac in self.acs])
-        samples = np.arange(0, self.horizon + 1, self.step_skip)
+
+        # start checking from the first non-zero sample
+        samples = np.arange(self.step_skip, self.horizon + 1, self.step_skip)
 
         for t in samples:
             τ = t * self.dt
@@ -323,15 +163,18 @@ class GlobalPSO:
                     frac = (d - cum[idx]) / seg_len if seg_len > 0 else 0.0
                     positions.append(A + (B - A) * frac)
 
-            # Hard‐constraint separation check
+            # HARD CONSTRAINT: only now enforce min_sep
             for i in range(self.m):
                 for j in range(i + 1, self.m):
+                    d_ij = positions[i].distance_to(positions[j])
                     if positions[i].distance_to(positions[j]) < self.min_sep:
-                        return float('inf')
+                        return 1e9 + (self.min_sep - d_ij)**2
 
-        # If safe: cost = sum of squared deviations from current speeds
+        # if no breaches, cost = velocity‐deviation penalty
         vel_pen = np.sum((speeds - init_speeds) ** 2)
         return self.fuel_w * vel_pen
+    
+
 
     def optimize(self):
         """
@@ -422,12 +265,23 @@ class ATCAgent:
             step_skip=self.global_step_skip
         )
         global_speeds = global_pso.optimize()
+
+        # # Plot PSO costs over itterations to check convergence
+        # plt.figure(figsize=(6,4))
+        # plt.plot(global_pso.history, marker='o')
+        # plt.xlabel("PSO iteration")
+        # plt.ylabel("Global best cost")
+        # plt.title("PSO convergence (single run)")
+        # plt.grid(True)
+        # plt.draw()
+        # plt.pause(0.001)
+
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
         
         # LOCAL PSO on any clusters within local_comm_radius
         clusters = _find_clusters(acs, self.local_comm_radius)
-        print("Local clusters:", [[ac.id for ac in c] for c in clusters])
+        # print("Local clusters:", [[ac.id for ac in c] for c in clusters])
         for cluster in clusters:
             local_pso = GlobalPSO(
                 cluster,
@@ -441,6 +295,17 @@ class ATCAgent:
                 step_skip=1
             )
             local_speeds = local_pso.optimize()
+            
+            # Plot PSO costs over itterations to check convergence
+            plt.figure(figsize=(6,4))
+            plt.plot(local_pso.history, marker='o')
+            plt.xlabel("PSO iteration")
+            plt.ylabel("Local best cost")
+            plt.title("PSO convergence (single run)")
+            plt.grid(True)
+            plt.draw()
+            plt.pause(0.001)
+            
             for ac, s in zip(cluster, local_speeds):
                 ac.set_target_speed(s)
 
@@ -585,7 +450,7 @@ if __name__ == '__main__':
         pso_w=0.5,
         pso_c1=1.2,
         pso_c2=1.2,
-        pso_iters=12,
+        pso_iters=8,
         horizon_steps=3000,
         step_skip=20,
         local_comm_radius=20000,
