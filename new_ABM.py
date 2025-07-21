@@ -146,8 +146,8 @@ class GlobalPSO:
 
     def _simulate_cost(self, speeds):
         """
-        Simulate trajectories under `speeds`, **starting from each AC’s current
-        position** (not path start). Enforce separation after t>0.
+        Simulate trajectories under `speeds`, starting from each AC’s current
+        position. Enforce separation after t>0.
         """
         init_speeds = np.array([ac.speed for ac in self.acs])
         samples = np.arange(self.step_skip, self.horizon + 1, self.step_skip)
@@ -162,26 +162,26 @@ class GlobalPSO:
                 cum = self.path_cumlens[i]
                 pts = self.path_pts[i]
 
-                # 1️⃣ Compute how far this AC already is along its path:
-                #    - cum[ac.segment] is distance up to last passed waypoint
-                #    - add the partial distance from that waypoint to current pos
+                # 1. Compute how far this AC already is along its path:
+                #    -> cum[ac.segment] is distance up to last passed waypoint
+                #    -> add the partial distance from that waypoint to current pos
                 seg_idx = ac.segment
                 already = cum[seg_idx]
-                A = pts[seg_idx]
-                P = ac.position
-                # convert Δ lat/lon between A and P into meters
+                A = pts[seg_idx] # last past waypoint 
+                P = ac.position # current pos aicraft 
+                # convert dif. lat/lon between A and P into meters
                 mean_lat = np.deg2rad((A.y + P.y)/2)
                 dlat = (P.y - A.y) * M_PER_DEG
                 dlon = (P.x - A.x) * M_PER_DEG * np.cos(mean_lat)
                 already += np.hypot(dlat, dlon)
 
-                # 2️⃣ Simulate forward-moving distance at constant speed
+                # 2. Simulate forward-moving distance at constant speed
                 forward = speeds[i] * τ
 
-                # 3️⃣ Total distance along path = already + forward
+                # Total distance along path = already + forward
                 d_total = min(already + forward, cum[-1])
 
-                # 4️⃣ Find which segment that lands us in, and interpolate
+                # Find which segment that lands us in, and interpolate
                 idx = bisect.bisect_right(cum, d_total) - 1
                 if idx >= len(pts) - 1:
                     positions.append(pts[-1])
@@ -191,7 +191,7 @@ class GlobalPSO:
                     frac = (d_total - cum[idx]) / seg_len if seg_len > 0 else 0.0
                     positions.append(A + (B - A) * frac)
 
-            # 5️⃣ Pairwise separation check
+            # Pairwise separation check
             for i in range(self.m):
                 for j in range(i+1, self.m):
                     d_ij = positions[i].distance_to(positions[j])
@@ -200,21 +200,40 @@ class GlobalPSO:
                         return 1e9 + (self.min_sep - d_ij)**2
                     spread_pen += (self.min_sep / d_ij)**2
 
-        # 6️⃣ (Optional) fuel‐change penalty, etc.
+        # fuel‐change penalty, etc.
         vel_pen = np.sum((speeds - init_speeds)**2)
 
         return self.sep_w * spread_pen + self.fuel_w * vel_pen
     
 
-
     def optimize(self):
         """
         Run PSO and return the best speed profile found.
-        Records self.history of gbest_cost per iteration.
+        Before starting, compute & print each AC’s remaining distance to runway.
         """
-        nP = self.X.shape[0]
+        # Compute remaining distance for each aircraft
+        for i, ac in enumerate(self.acs):
+            cum = self.path_cumlens[i]
+            pts = self.path_pts[i]
+            seg = ac.segment
 
-        # --- Initialization pass to seed pbest & gbest ---
+            # a) distance up to last passed waypoint
+            already = cum[seg]
+
+            # b) plus the partial distance from that waypoint to current position
+            A = pts[seg]
+            P = ac.position
+            mean_lat = np.deg2rad((A.y + P.y)/2)
+            dlat = (P.y - A.y) * M_PER_DEG
+            dlon = (P.x - A.x) * M_PER_DEG * np.cos(mean_lat)
+            already += np.hypot(dlat, dlon)
+
+            # c) remaining = total path length minus what’s already flown
+            remaining = cum[-1] - already
+            # print(f"  AC {ac.id} (on path '{ac.path_id}'): {remaining:.1f} m")
+
+        # Seed pbest & gbest 
+        nP = self.X.shape[0]
         for k in range(nP):
             cost = self._simulate_cost(self.X[k])
             self.pbest_cost[k] = cost
@@ -223,12 +242,10 @@ class GlobalPSO:
                 self.gbest_cost = cost
                 self.gbest = self.X[k].copy()
 
-        # Prepare history list
         self.history = [self.gbest_cost]
 
-        # --- Main PSO loop ---
+        # Main PSO loop 
         for _ in range(self.max_iter):
-            # Update personal & global bests
             for k in range(nP):
                 cost = self._simulate_cost(self.X[k])
                 if cost < self.pbest_cost[k]:
@@ -237,21 +254,15 @@ class GlobalPSO:
                 if cost < self.gbest_cost:
                     self.gbest_cost = cost
                     self.gbest = self.X[k].copy()
-
-            # Record current best cost
             self.history.append(self.gbest_cost)
-
-            # Velocity & position updates
-            r1 = np.random.rand(nP, self.m)
-            r2 = np.random.rand(nP, self.m)
-            self.V = (
-                self.w * self.V
-                + self.c1 * r1 * (self.pbest - self.X)
-                + self.c2 * r2 * (self.gbest - self.X)
-            )
+            r1, r2 = np.random.rand(nP, self.m), np.random.rand(nP, self.m)
+            self.V = ( self.w * self.V
+                     + self.c1 * r1 * (self.pbest - self.X)
+                     + self.c2 * r2 * (self.gbest - self.X) )
             self.X = np.clip(self.X + self.V, self.E, self.L)
 
         return self.gbest.copy()
+    
 
 
 class ATCAgent:
@@ -401,11 +412,11 @@ def runme(paths_dict,
           min_sep=3000.0,
           sep_weight=100,
           fuel_weight=1,
-          pso_particles=12,
+          pso_particles=24,
           pso_w=0.5,
           pso_c1=1.2,
           pso_c2=1.2,
-          pso_iters=12,
+          pso_iters=24,
           horizon_steps=3000,
           step_skip=20,
           local_comm_radius=20000,
@@ -450,7 +461,7 @@ def runme(paths_dict,
         for i, ac1 in enumerate(aircraft_list):
             for ac2 in aircraft_list[i+1:]:
                 if ac1.distance_to(ac2) < min_sep:
-                    print(f'Collisions detected between {ac1.id} and {ac2.id}')
+                    # print(f'Collisions detected between {ac1.id} and {ac2.id}')
                     collisions += 1
         if visualize:
             viz.aircraft_list = aircraft_list
@@ -467,7 +478,7 @@ if __name__ == '__main__':
     sim_kwargs = dict(
         paths_dict=paths_dict,
         sim_duration=20000.0,
-        visualize=True,       
+        visualize=False,       
         width=1024,
         height=768,
         initial_speed=100.0,
@@ -494,7 +505,7 @@ if __name__ == '__main__':
     )
 
     results = []
-    for i in range(1):
+    for i in range(5):
         res = runme(**sim_kwargs)
         print(f"Run {i+1}: collisions={res['collisions']}, throughput={res['throughput']}")
         results.append(res)
