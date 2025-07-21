@@ -267,14 +267,14 @@ class ATCAgent:
         global_speeds = global_pso.optimize()
 
         # Plot PSO costs over itterations to check convergence
-        plt.figure(figsize=(6,4))
-        plt.plot(global_pso.history, marker='o')
-        plt.xlabel("PSO iteration")
-        plt.ylabel("Global best cost")
-        plt.title("PSO convergence (single run)")
-        plt.grid(True)
-        plt.draw()
-        plt.pause(0.001)
+        # plt.figure(figsize=(6,4))
+        # plt.plot(global_pso.history, marker='o')
+        # plt.xlabel("PSO iteration")
+        # plt.ylabel("Global best cost")
+        # plt.title("PSO convergence (single run)")
+        # plt.grid(True)
+        # plt.draw()
+        # plt.pause(0.001)
 
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
@@ -311,8 +311,10 @@ class ATCAgent:
 
 
 class Visualization:
+    
     PALETTE=[(255,0,0),(0,255,0),(0,0,255),(255,255,0),(255,0,255),(0,255,255),
              (128,0,128),(255,165,0),(0,128,128),(128,128,0)]
+    
     def __init__(self,paths_dict,width,height,min_sep):
         self.paths=paths_dict; self.width,self.height=width,height; self.min_sep=min_sep
         self.lat_min=min(lat for p in paths_dict.values() for lat,lon in p)
@@ -378,11 +380,13 @@ def runme(paths_dict,
           local_comm_radius=20000,
           local_horizon=40,
           local_sep_weight=10000.0):
+    
     atc = ATCAgent(min_speed, max_speed, acceleration,
                    min_sep, sep_weight, fuel_weight,
                    pso_particles, pso_w, pso_c1, pso_c2, pso_iters,
                    horizon_steps, step_skip,
                    local_comm_radius, local_horizon, local_sep_weight)
+    
     aircraft_list = []
     spawn_t = pso_t = sim_t = 0.0
     collisions = throughput = 0
@@ -432,7 +436,7 @@ if __name__ == '__main__':
     sim_kwargs = dict(
         paths_dict=paths_dict,
         sim_duration=20000.0,
-        visualize=True,       # headless for speed
+        visualize=True,       
         width=1024,
         height=768,
         initial_speed=100.0,
@@ -440,7 +444,7 @@ if __name__ == '__main__':
         min_speed=80.0,
         max_speed=130.0,
         spawn_interval=400.0,
-        pso_interval=50.0,
+        pso_interval=100.0,
         time_scale=100.0,
         fps=30,
         min_sep=3000.0,
@@ -452,7 +456,7 @@ if __name__ == '__main__':
         pso_c2=1.2,
         pso_iters=8,
         horizon_steps=3000,
-        step_skip=20,
+        step_skip=10,
         local_comm_radius=20000,
         local_horizon=40,
         local_sep_weight=10000.0
