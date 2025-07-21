@@ -163,16 +163,19 @@ class GlobalPSO:
                     frac = (d - cum[idx]) / seg_len if seg_len > 0 else 0.0
                     positions.append(A + (B - A) * frac)
 
-            # HARD CONSTRAINT: only now enforce min_sep
+            # for every pair, hard‐penalise if inside min_sep, otherwise soft‐penalise inversely
             for i in range(self.m):
-                for j in range(i + 1, self.m):
+                for j in range(i+1, self.m):
                     d_ij = positions[i].distance_to(positions[j])
-                    if positions[i].distance_to(positions[j]) < self.min_sep:
+                    if d_ij < self.min_sep:
                         return 1e9 + (self.min_sep - d_ij)**2
+                    # soft penalty: smaller distances ⇒ larger cost
+                    spread_pen += (self.min_sep / d_ij)**2
 
-        # if no breaches, cost = velocity‐deviation penalty
-        vel_pen = np.sum((speeds - init_speeds) ** 2)
-        return self.fuel_w * vel_pen
+        # fuel‐change penalty
+        vel_pen = np.sum((speeds - init_speeds)**2)
+        # combine soft‐sep + fuel costs
+        return self.sep_w * spread_pen + self.fuel_w * vel_pen
     
 
 
@@ -267,14 +270,14 @@ class ATCAgent:
         global_speeds = global_pso.optimize()
 
         # Plot PSO costs over itterations to check convergence
-        # plt.figure(figsize=(6,4))
-        # plt.plot(global_pso.history, marker='o')
-        # plt.xlabel("PSO iteration")
-        # plt.ylabel("Global best cost")
-        # plt.title("PSO convergence (single run)")
-        # plt.grid(True)
-        # plt.draw()
-        # plt.pause(0.001)
+        plt.figure(figsize=(6,4))
+        plt.plot(global_pso.history, marker='o')
+        plt.xlabel("PSO iteration")
+        plt.ylabel("Global best cost")
+        plt.title("PSO convergence (single run)")
+        plt.grid(True)
+        plt.draw()
+        plt.pause(0.001)
 
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
