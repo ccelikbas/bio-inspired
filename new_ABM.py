@@ -198,7 +198,14 @@ class GlobalPSO:
                     if d_ij < self.min_sep:
                         # Hard-violation: abort with huge penalty
                         return 1e9 + (self.min_sep - d_ij)**2
-                    spread_pen += (self.min_sep / d_ij)**2
+                        # return 5000 + (self.min_sep - d_ij)**2
+                    else:
+                        spread_pen += (self.min_sep / d_ij)**2
+                    # if d_ij < self.min_sep:
+                    #     # add a steep but continuous penalty
+                    #     spread_pen += 1e5 * (self.min_sep - d_ij)**2
+                    # else:
+                    #     spread_pen += (self.min_sep / d_ij)**2
 
         # fuel‐change penalty, etc.
         vel_pen = np.sum((speeds - init_speeds)**2)
@@ -477,35 +484,35 @@ if __name__ == '__main__':
     # parameters for the simulation
     sim_kwargs = dict(
         paths_dict=paths_dict,
-        sim_duration=20000.0,
-        visualize=False,       
-        width=1024,
-        height=768,
-        initial_speed=100.0,
-        acceleration=1,
-        min_speed=80.0,
-        max_speed=130.0,
-        spawn_interval=400.0,
-        pso_interval=100.0,
-        time_scale=100.0,
-        fps=30,
-        min_sep=3000.0,
-        sep_weight=1,
-        fuel_weight=0,
-        pso_particles=12,
-        pso_w=0.5,
-        pso_c1=1.2,
-        pso_c2=1.2,
-        pso_iters=8,
-        horizon_steps=3000,
-        step_skip=10,
-        local_comm_radius=20000,
-        local_horizon=40,
-        local_sep_weight=10000.0
+    sim_duration=20000.0,
+    visualize=True,
+    width=1024,
+    height=768,
+    initial_speed=100.0,
+    acceleration=0.5,
+    min_speed=80.0,
+    max_speed=130.0,
+    spawn_interval=400.0,
+    pso_interval=100.0,
+    time_scale=100.0,
+    fps=30,
+    min_sep=3000.0,
+    sep_weight=1,
+    fuel_weight=1,
+    pso_particles=30,
+    pso_w=0.643852371671638,
+    pso_c1=1.5066396693442399,
+    pso_c2=1.7414431113477675,
+    pso_iters=30,
+    horizon_steps=3000,
+    step_skip=10,
+    local_comm_radius=20000,
+    local_horizon=40,
+    local_sep_weight=10000.0
     )
 
     results = []
-    for i in range(5):
+    for i in range(1):
         res = runme(**sim_kwargs)
         print(f"Run {i+1}: collisions={res['collisions']}, throughput={res['throughput']}")
         results.append(res)
@@ -523,60 +530,106 @@ if __name__ == '__main__':
     print(f"  Throughput: mean = {thr_mean:.2f}, std = {thr_std:.2f}")
 
 
-# --- Evolutionary Robotics layer to tune PSO hyperparameters ---
+# import random
+# import copy
+# sim_kwargs = dict(
+#     paths_dict=paths_dict,
+#     sim_duration=20000.0,
+#     visualize=False,
+#     width=1024,
+#     height=768,
+#     initial_speed=100.0,
+#     acceleration=0.5,
+#     min_speed=80.0,
+#     max_speed=130.0,
+#     spawn_interval=400.0,
+#     pso_interval=50.0,
+#     time_scale=100.0,
+#     fps=30,
+#     min_sep=3000.0,
+#     sep_weight=100,
+#     fuel_weight=1,
+#     pso_particles=50,
+#     pso_w=0.643852371671638,
+#     pso_c1=1.5066396693442399,
+#     pso_c2=1.7414431113477675,
+#     pso_iters=30,
+#     horizon_steps=3000,
+#     step_skip=20,
+#     local_comm_radius=20000,
+#     local_horizon=40,
+#     local_sep_weight=10000.0
+# )
+
 
 # def random_genome():
 #     return {
-#         'w': random.uniform(0.1, 1.0),
-#         'c1': random.uniform(0.5, 2.5),
-#         'c2': random.uniform(0.5, 2.5)
+#         'w':            random.uniform(0.1, 1.0),
+#         'c1':           random.uniform(0.5, 2.5),
+#         'c2':           random.uniform(0.5, 2.5),
+#         'n_particles':  random.randint(5, 30),
+#         'max_iter':     random.randint(5, 50),
 #     }
 
 # def mutate(genome, rate=0.2):
-#     for k in genome:
+#     # mutate floats
+#     for key in ('w','c1','c2'):
 #         if random.random() < rate:
-#             genome[k] += random.uniform(-0.1, 0.1)
-#             genome[k] = max(0.0, min(3.0, genome[k]))
+#             genome[key] += random.uniform(-0.1, 0.1)
+#             genome[key] = max(0.0, min(3.0, genome[key]))
+#     # mutate ints
+#     for key, lo, hi in (('n_particles',5,30), ('max_iter',5,50)):
+#         if random.random() < rate:
+#             genome[key] += random.choice([-1,1])
+#             genome[key] = max(lo, min(hi, genome[key]))
 
 # def fitness(genome):
-#     res = runme(
-#         paths_dict,
-#         visualize=False,
-#         pso_w=genome['w'],
-#         pso_c1=genome['c1'],
-#         pso_c2=genome['c2']
-#     )
-#     # print KPIs for this evaluation
-#     print(f"    Evaluated {genome} -> collisions={res['collisions']}, throughput={res['throughput']}")
-#     return res['throughput'] - 1000 * res['collisions']
+#     # override sim_kwargs with this genome’s PSO settings
+#     params = {
+#         **sim_kwargs,
+#         'visualize': False,
+#         'pso_particles': genome['n_particles'],
+#         'pso_w':         genome['w'],
+#         'pso_c1':        genome['c1'],
+#         'pso_c2':        genome['c2'],
+#         'pso_iters':     genome['max_iter']
+#     }
+#     res = runme(**params)
+#     score = res['throughput'] - 1000 * res['collisions']
+#     print(f"  {genome} → coll={res['collisions']}, thr={res['throughput']}, score={score}")
+#     return score
 
-# def evolve_population(pop_size=10, generations=5):
-#     pop = [random_genome() for _ in range(pop_size)]
+# def evolve_population(pop_size=10, generations=5, retain=0.5, mutate_rate=0.2):
+#     population = [random_genome() for _ in range(pop_size)]
 #     for gen in range(generations):
-#         scored = [(fitness(g), g) for g in pop]
-#         scored.sort(key=lambda x: x[0], reverse=True)
+#         scored = sorted([(fitness(g), g) for g in population],
+#                         key=lambda x: x[0], reverse=True)
 #         best_score, best_genome = scored[0]
-#         print(f"Gen {gen}: best {best_genome} → score {best_score}")
-#         next_pop = [copy.deepcopy(best_genome)]
-#         while len(next_pop) < pop_size:
-#             parent = copy.deepcopy(random.choice(scored[:pop_size//2])[1])
-#             mutate(parent)
-#             next_pop.append(parent)
-#         pop = next_pop
+#         print(f"Gen {gen}: best={best_genome} (score={best_score})")
+#         survivors = [g for _, g in scored[:int(pop_size * retain)]]
+#         # refill
+#         population = []
+#         while len(population) < pop_size:
+#             parent = copy.deepcopy(random.choice(survivors))
+#             mutate(parent, rate=mutate_rate)
+#             population.append(parent)
 #     return best_genome
 
+# def main():
+#     best = evolve_population(pop_size=8, generations=6, retain=0.5, mutate_rate=0.3)
+#     print(f"\nEvolved hyperparameters: {best}\n")
+#     # final visual run
+#     final_params = {
+#         **sim_kwargs,
+#         'visualize': True,
+#         'pso_particles': best['n_particles'],
+#         'pso_w':         best['w'],
+#         'pso_c1':        best['c1'],
+#         'pso_c2':        best['c2'],
+#         'pso_iters':     best['max_iter']
+#     }
+#     results = runme(**final_params)
+#     print("Final KPIs:", results)
 
-# if __name__ == '__main__':
-#     best = evolve_population(pop_size=8, generations=6)
-#     print(f"=== Evolved hyperparameters: {best} ===")
-#     # run final sim with evolved params
-#     result = runme(
-#         paths_dict,
-#         visualize=True,
-#         pso_w=best['w'],
-#         pso_c1=best['c1'],
-#         pso_c2=best['c2']
-#     )
-#     print("Final KPIs:", result)
-
-
+# if __name__ == "__main__":
+#     main()
