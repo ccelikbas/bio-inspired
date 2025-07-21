@@ -119,14 +119,22 @@ class GlobalPSO:
         self.path_pts     = []
         for ac in self.acs:
             pts = ac.path
+            # print(pts)
             dist = [0.0]
             for A, B in zip(pts[:-1], pts[1:]):
                 mean_lat = np.deg2rad((A.y + B.y)/2)
                 dlat = (B.y - A.y)*M_PER_DEG
                 dlon = (B.x - A.x)*M_PER_DEG*np.cos(mean_lat)
                 dist.append(np.hypot(dlat, dlon))
+            
+            # cum[k] = distance from waypoint[0] up through waypoint[k]
             self.path_cumlens.append(np.cumsum(dist))
             self.path_pts.append(pts)
+
+        # # print total path length for each aircraft
+        # print("Total path lengths to runway for each aircraft from start point:")
+        # for ac, cum in zip(self.acs, self.path_cumlens):
+        #     print(f"  AC {ac.id} (path {ac.path_id}): {cum[-1]:.1f} m")
 
         # Initialize swarm positions & velocities
         self.X = np.random.uniform(self.E, self.L, (n_particles, self.m))
@@ -138,43 +146,63 @@ class GlobalPSO:
 
     def _simulate_cost(self, speeds):
         """
-        Simulate trajectories under `speeds`.  
-        Enforce separation only after the first interval, so t=0 is ignored.
+        Simulate trajectories under `speeds`, **starting from each AC’s current
+        position** (not path start). Enforce separation after t>0.
         """
         init_speeds = np.array([ac.speed for ac in self.acs])
-
-        # start checking from the first non-zero sample
         samples = np.arange(self.step_skip, self.horizon + 1, self.step_skip)
+
+        spread_pen = 0.0
 
         for t in samples:
             τ = t * self.dt
-            D = speeds * τ
             positions = []
             for i in range(self.m):
+                ac  = self.acs[i]
                 cum = self.path_cumlens[i]
                 pts = self.path_pts[i]
-                d = min(D[i], cum[-1])
-                idx = bisect.bisect_right(cum, d) - 1
+
+                # 1️⃣ Compute how far this AC already is along its path:
+                #    - cum[ac.segment] is distance up to last passed waypoint
+                #    - add the partial distance from that waypoint to current pos
+                seg_idx = ac.segment
+                already = cum[seg_idx]
+                A = pts[seg_idx]
+                P = ac.position
+                # convert Δ lat/lon between A and P into meters
+                mean_lat = np.deg2rad((A.y + P.y)/2)
+                dlat = (P.y - A.y) * M_PER_DEG
+                dlon = (P.x - A.x) * M_PER_DEG * np.cos(mean_lat)
+                already += np.hypot(dlat, dlon)
+
+                # 2️⃣ Simulate forward-moving distance at constant speed
+                forward = speeds[i] * τ
+
+                # 3️⃣ Total distance along path = already + forward
+                d_total = min(already + forward, cum[-1])
+
+                # 4️⃣ Find which segment that lands us in, and interpolate
+                idx = bisect.bisect_right(cum, d_total) - 1
                 if idx >= len(pts) - 1:
                     positions.append(pts[-1])
                 else:
                     A, B = pts[idx], pts[idx + 1]
                     seg_len = cum[idx + 1] - cum[idx]
-                    frac = (d - cum[idx]) / seg_len if seg_len > 0 else 0.0
+                    frac = (d_total - cum[idx]) / seg_len if seg_len > 0 else 0.0
                     positions.append(A + (B - A) * frac)
 
-            # for every pair, hard‐penalise if inside min_sep, otherwise soft‐penalise inversely
+            # 5️⃣ Pairwise separation check
             for i in range(self.m):
                 for j in range(i+1, self.m):
                     d_ij = positions[i].distance_to(positions[j])
                     if d_ij < self.min_sep:
+                        # Hard-violation: abort with huge penalty
                         return 1e9 + (self.min_sep - d_ij)**2
-                    # soft penalty: smaller distances ⇒ larger cost
                     spread_pen += (self.min_sep / d_ij)**2
 
-        # fuel‐change penalty
+        # 6️⃣ (Optional) fuel‐change penalty, etc.
         vel_pen = np.sum((speeds - init_speeds)**2)
-        # combine soft‐sep + fuel costs
+
         return self.sep_w * spread_pen + self.fuel_w * vel_pen
     
 
@@ -270,14 +298,14 @@ class ATCAgent:
         global_speeds = global_pso.optimize()
 
         # Plot PSO costs over itterations to check convergence
-        plt.figure(figsize=(6,4))
-        plt.plot(global_pso.history, marker='o')
-        plt.xlabel("PSO iteration")
-        plt.ylabel("Global best cost")
-        plt.title("PSO convergence (single run)")
-        plt.grid(True)
-        plt.draw()
-        plt.pause(0.001)
+        # plt.figure(figsize=(6,4))
+        # plt.plot(global_pso.history, marker='o')
+        # plt.xlabel("PSO iteration")
+        # plt.ylabel("Global best cost")
+        # plt.title("PSO convergence (single run)")
+        # plt.grid(True)
+        # plt.draw()
+        # plt.pause(0.001)
 
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
@@ -422,7 +450,7 @@ def runme(paths_dict,
         for i, ac1 in enumerate(aircraft_list):
             for ac2 in aircraft_list[i+1:]:
                 if ac1.distance_to(ac2) < min_sep:
-                    # print(f'Collisions detected')
+                    print(f'Collisions detected between {ac1.id} and {ac2.id}')
                     collisions += 1
         if visualize:
             viz.aircraft_list = aircraft_list
@@ -451,8 +479,8 @@ if __name__ == '__main__':
         time_scale=100.0,
         fps=30,
         min_sep=3000.0,
-        sep_weight=100,
-        fuel_weight=1,
+        sep_weight=1,
+        fuel_weight=0,
         pso_particles=12,
         pso_w=0.5,
         pso_c1=1.2,
