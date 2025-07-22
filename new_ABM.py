@@ -281,16 +281,32 @@ class GlobalPSO:
                     frac = (d_total - cum[idx]) / seg_len if seg_len > 0 else 0.0
                     positions.append(A + (B - A) * frac)
 
-            # Pairwise separation check
+            # smoother optimisation attempt
+            max_allowed_penalty = 1e6
             for i in range(self.m):
-                for j in range(i+1, self.m):
+                for j in range(i + 1, self.m):
                     d_ij = positions[i].distance_to(positions[j])
                     if d_ij < self.min_sep:
-                        # Hard-violation: abort with huge penalty
-                        # return 1e9 + (self.min_sep - d_ij)**2
-                        return 5000 + (self.min_sep - d_ij)**2
+                        spread_pen += 1000 * (1 / (d_ij + 1e-5))**4
+                        # spread_pen += 10000 * (self.min_sep - d_ij)**2
                     else:
-                        spread_pen += (self.min_sep / d_ij)**2
+                        spread_pen += (1 / d_ij)**2
+
+                    if spread_pen > max_allowed_penalty:
+                        return spread_pen  # soft early abort
+
+
+            # # Pairwise separation check
+            # for i in range(self.m):
+            #     for j in range(i+1, self.m):
+            #         d_ij = positions[i].distance_to(positions[j])
+            #         if d_ij < self.min_sep:
+            #             # Hard-violation: abort with huge penalty
+            #             # return 1e9 + (self.min_sep - d_ij)**2
+            #             return 5000 + (self.min_sep - d_ij)**2
+            #         else:
+            #             spread_pen += (self.min_sep / d_ij)**2
+                    
                     # if d_ij < self.min_sep:
                     #     # add a steep but continuous penalty
                     #     spread_pen += 1e5 * (self.min_sep - d_ij)**2
@@ -551,44 +567,72 @@ def runme(paths_dict,
     aircraft_list = []
     spawn_t = pso_t = sim_t = 0.0
     collisions = throughput = 0
+    arrival_times = []
+
     if visualize:
         viz = Visualization(paths_dict, width, height, min_sep)
         clock = pygame.time.Clock()
+
     while sim_t < sim_duration:
         raw = clock.tick(fps)/1000.0 if visualize else 1.0/fps
         dt = raw * time_scale
+
         if visualize:
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     sim_t = sim_duration; break
+
         spawn_t += dt
         if spawn_t >= spawn_interval:
             pid, path = random.choice(list(paths_dict.items()))
             aircraft_list.append(Aircraft(pid, path, initial_speed,
                                          acceleration, min_speed, max_speed))
             spawn_t -= spawn_interval
+
         pso_t += dt
         if pso_t >= pso_interval:
             atc.communicate(aircraft_list, dt, add_con_plot)
             pso_t -= pso_interval
+
         for ac in aircraft_list[:]:
             ac.update(dt, aircraft_list, LOCAL_SEP_RADIUS)
             if ac.is_finished():
                 aircraft_list.remove(ac)
-                # print(f'Aircraft landed')
+                arrival_times.append(sim_t)
                 throughput += 1
+
         for i, ac1 in enumerate(aircraft_list):
             for ac2 in aircraft_list[i+1:]:
                 if ac1.distance_to(ac2) < min_sep:
-                    # print(f'Collisions detected between {ac1.id} and {ac2.id}')
                     collisions += 1
+
         if visualize:
             viz.aircraft_list = aircraft_list
             viz.draw(sim_t)
+
         sim_t += dt
+
     if visualize:
         pygame.quit()
-    return {'collisions': collisions, 'throughput': throughput}
+
+    # KPI: Compute arrival spread
+    arrival_times.sort()
+    if len(arrival_times) >= 2:
+        inter_arrivals = np.diff(arrival_times)
+        mean_arrival_gap = float(np.mean(inter_arrivals))
+        std_arrival_gap  = float(np.std(inter_arrivals))
+        min_arrival_gap  = float(np.min(inter_arrivals))
+    else:
+        mean_arrival_gap = std_arrival_gap = min_arrival_gap = None
+
+    return {
+        'collisions': collisions,
+        'throughput': throughput,
+        'mean_arrival_gap': mean_arrival_gap,
+        'std_arrival_gap': std_arrival_gap,
+        'min_arrival_gap': min_arrival_gap
+    }
+
 
 if __name__ == '__main__':
     import numpy as np
@@ -596,52 +640,71 @@ if __name__ == '__main__':
     # parameters for the simulation
     sim_kwargs = dict(
         paths_dict=paths_dict,
-    sim_duration=20000.0,
-    visualize=False,
-    add_con_plot = False,
-    width=1024,
-    height=768,
-    initial_speed=100.0,
-    acceleration=1,
-    min_speed=80.0,
-    max_speed=130.0,
-    spawn_interval=300.0,
-    pso_interval=50.0,
-    time_scale=100.0,
-    fps=30,
-    min_sep=3000.0,
-    sep_weight=1,
-    fuel_weight=0,
-    pso_particles=100,
-    pso_w=0.643852371671638,
-    pso_c1=1.5066396693442399,
-    pso_c2=1.7414431113477675,
-    pso_iters=6,
-    horizon_steps=3000,
-    step_skip=20,
-    local_comm_radius=20000,
-    local_horizon=40,
-    local_sep_weight=10000.0, 
-    LOCAL_SEP_RADIUS = 6000
+        sim_duration=20000.0,
+        visualize=False,
+        add_con_plot=False,
+        width=1024,
+        height=768,
+        initial_speed=100.0,
+        acceleration=1,
+        min_speed=80.0,
+        max_speed=130.0,
+        spawn_interval=300.0,
+        pso_interval=50.0,
+        time_scale=100.0,
+        fps=30,
+        min_sep=3000.0,
+        sep_weight=1,
+        fuel_weight=0,
+        pso_particles=100,
+        pso_w=0.643852371671638,
+        pso_c1=1.5066396693442399,
+        pso_c2=1.7414431113477675,
+        pso_iters=10,
+        horizon_steps=3000,
+        step_skip=20,
+        local_comm_radius=20000,
+        local_horizon=40,
+        local_sep_weight=10000.0,
+        LOCAL_SEP_RADIUS=6000
     )
 
     results = []
     for i in range(20):
         res = runme(**sim_kwargs)
-        print(f"Run {i+1}: collisions={res['collisions']}, throughput={res['throughput']}")
+        print(
+            f"Run {i+1}: "
+            f"collisions={res['collisions']}, "
+            f"throughput={res['throughput']}, "
+            f"mean_gap={res['mean_arrival_gap']:.1f}s, "
+            f"std_gap={res['std_arrival_gap']:.1f}s, "
+            f"min_gap={res['min_arrival_gap']:.1f}s"
+            if res['mean_arrival_gap'] is not None else 
+            f"Run {i+1}: insufficient arrivals for gap metrics"
+        )
         results.append(res)
 
     # extract metrics as numpy arrays
     collisions = np.array([r['collisions'] for r in results])
     throughput = np.array([r['throughput'] for r in results])
+    mean_gaps = np.array([r['mean_arrival_gap'] for r in results if r['mean_arrival_gap'] is not None])
+    std_gaps  = np.array([r['std_arrival_gap'] for r in results if r['std_arrival_gap'] is not None])
+    min_gaps  = np.array([r['min_arrival_gap'] for r in results if r['min_arrival_gap'] is not None])
 
     # compute statistics
     coll_mean, coll_std = collisions.mean(), collisions.std(ddof=1)
     thr_mean, thr_std   = throughput.mean(), throughput.std(ddof=1)
-
+    
     print("\nSummary over runs:")
     print(f"  Collisions: mean = {coll_mean:.2f}, std = {coll_std:.2f}")
     print(f"  Throughput: mean = {thr_mean:.2f}, std = {thr_std:.2f}")
+    
+    if len(mean_gaps) > 0:
+        print(f"  Mean Arrival Gap: mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
+        print(f"  Std Arrival Gap:  mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
+        print(f"  Min Arrival Gap:  mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
+    else:
+        print("  Not enough arrivals to compute gap statistics.")
 
 
 # import random
