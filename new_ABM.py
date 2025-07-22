@@ -97,7 +97,8 @@ class GlobalPSO:
     def __init__(self, aircraft_list, min_speed, max_speed, dt, min_sep,
                  sep_weight, fuel_weight,
                  n_particles, w, c1, c2, max_iter,
-                 horizon_steps=3000, step_skip=15):
+                 horizon_steps=3000, step_skip=15,
+                 enforce_overtake=False):
         """
         Particle Swarm Optimizer over aircraft speeds.
         """
@@ -113,6 +114,7 @@ class GlobalPSO:
         self.max_iter  = max_iter
         self.horizon   = horizon_steps
         self.step_skip = step_skip
+        self.enforce_overtake = enforce_overtake
 
         # Precompute each aircraft’s cumulative path lengths & waypoints
         self.path_cumlens = []
@@ -149,6 +151,29 @@ class GlobalPSO:
         Simulate trajectories under `speeds`, starting from each AC’s current
         position. Enforce separation after t>0.
         """
+        # --- enforce follower‐≤‐leader on same approach path ---
+        if self.enforce_overtake:
+            # compute each AC's remaining distance to runway
+            rem = []
+            for i, ac in enumerate(self.acs):
+                cum = self.path_cumlens[i]
+                pts = self.path_pts[i]
+                seg = ac.segment
+                A = pts[seg]
+                P = ac.position
+                mean_lat = np.deg2rad((A.y + P.y)/2)
+                dlat = (P.y - A.y) * M_PER_DEG
+                dlon = (P.x - A.x) * M_PER_DEG * np.cos(mean_lat)
+                already = cum[seg] + np.hypot(dlat, dlon)
+                remaining = cum[-1] - already
+                rem.append(remaining)
+            rem = np.array(rem)
+            # impose: if AC i is ahead (rem[i]<rem[j]), then speeds[j] ≤ speeds[i]
+            for i in range(self.m):
+                for j in range(self.m):
+                    if rem[i] < rem[j] and speeds[j] > speeds[i]:
+                        return 1e9 + (speeds[j] - speeds[i])**2
+
         init_speeds = np.array([ac.speed for ac in self.acs])
         samples = np.arange(self.step_skip, self.horizon + 1, self.step_skip)
 
@@ -197,8 +222,8 @@ class GlobalPSO:
                     d_ij = positions[i].distance_to(positions[j])
                     if d_ij < self.min_sep:
                         # Hard-violation: abort with huge penalty
-                        return 1e9 + (self.min_sep - d_ij)**2
-                        # return 5000 + (self.min_sep - d_ij)**2
+                        # return 1e9 + (self.min_sep - d_ij)**2
+                        return 5000 + (self.min_sep - d_ij)**2
                     else:
                         spread_pen += (self.min_sep / d_ij)**2
                     # if d_ij < self.min_sep:
@@ -296,6 +321,22 @@ class ATCAgent:
         self.local_horizon      = local_horizon
         self.local_sep_weight   = local_sep_weight
 
+        plt.ion()
+
+        # ---- create a persistent figure/axis for GLOBAL PSO ----
+        self._g_fig, self._g_ax = plt.subplots(figsize=(5,3))
+        self._g_ax.set_title("Global PSO Convergence")
+        self._g_ax.set_xlabel("Iteration")
+        self._g_ax.set_ylabel("Best Cost")
+        self._g_ax.grid(True)
+
+        # ---- create a second persistent figure/axis for LOCAL PSO ----
+        self._l_fig, self._l_ax = plt.subplots(figsize=(5,3))
+        self._l_ax.set_title("Local PSO Convergence")
+        self._l_ax.set_xlabel("Iteration")
+        self._l_ax.set_ylabel("Best Cost")
+        self._l_ax.grid(True)
+
     def communicate(self, aircraft_list, dt):
         # select only unfinished aircraft
         acs = [ac for ac in aircraft_list if not ac.is_finished()]
@@ -315,15 +356,15 @@ class ATCAgent:
         )
         global_speeds = global_pso.optimize()
 
-        # Plot PSO costs over itterations to check convergence
-        # plt.figure(figsize=(6,4))
-        # plt.plot(global_pso.history, marker='o')
-        # plt.xlabel("PSO iteration")
-        # plt.ylabel("Global best cost")
-        # plt.title("PSO convergence (single run)")
-        # plt.grid(True)
-        # plt.draw()
-        # plt.pause(0.001)
+        # update the global plot
+        self._g_ax.clear()
+        self._g_ax.plot(global_pso.history, marker='o')
+        self._g_ax.set_title("Global PSO Convergence")
+        self._g_ax.set_xlabel("Iteration")
+        self._g_ax.set_ylabel("Best Cost")
+        self._g_ax.grid(True)
+        self._g_fig.canvas.draw()
+        self._g_fig.canvas.flush_events()
 
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
@@ -341,19 +382,20 @@ class ATCAgent:
                 self.w, self.c1, self.c2,
                 self.iters,
                 horizon_steps=self.local_horizon,
-                step_skip=1
+                step_skip=1,
+                enforce_overtake=False    # ← turn on no‑overtake here
             )
             local_speeds = local_pso.optimize()
             
-            # Plot PSO costs over itterations to check convergence
-            # plt.figure(figsize=(6,4))
-            # plt.plot(local_pso.history, marker='o')
-            # plt.xlabel("PSO iteration")
-            # plt.ylabel("Local best cost")
-            # plt.title("PSO convergence (single run)")
-            # plt.grid(True)
-            # plt.draw()
-            # plt.pause(0.001)
+            # update the local plot
+            self._l_ax.clear()
+            self._l_ax.plot(local_pso.history, marker='o')
+            self._l_ax.set_title("Local PSO Convergence")
+            self._l_ax.set_xlabel("Iteration")
+            self._l_ax.set_ylabel("Best Cost")
+            self._l_ax.grid(True)
+            self._l_fig.canvas.draw()
+            self._l_fig.canvas.flush_events()
             
             for ac, s in zip(cluster, local_speeds):
                 ac.set_target_speed(s)
@@ -492,18 +534,18 @@ if __name__ == '__main__':
     acceleration=0.5,
     min_speed=80.0,
     max_speed=130.0,
-    spawn_interval=400.0,
-    pso_interval=100.0,
+    spawn_interval=300.0,
+    pso_interval=50.0,
     time_scale=100.0,
     fps=30,
     min_sep=3000.0,
     sep_weight=1,
-    fuel_weight=1,
+    fuel_weight=0,
     pso_particles=30,
     pso_w=0.643852371671638,
     pso_c1=1.5066396693442399,
     pso_c2=1.7414431113477675,
-    pso_iters=30,
+    pso_iters=15,
     horizon_steps=3000,
     step_skip=10,
     local_comm_radius=20000,
@@ -512,7 +554,7 @@ if __name__ == '__main__':
     )
 
     results = []
-    for i in range(1):
+    for i in range(10):
         res = runme(**sim_kwargs)
         print(f"Run {i+1}: collisions={res['collisions']}, throughput={res['throughput']}")
         results.append(res)
