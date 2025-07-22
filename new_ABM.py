@@ -59,26 +59,65 @@ class Aircraft:
     def set_target_speed(self, new_speed):
         self.target_speed = max(self.min_speed, min(self.max_speed, new_speed))
 
-    def update(self, dt):
+    def update(self, dt, all_aircraft, LOCAL_SEP_RADIUS):
+        # --- 1) Compute my heading vector to next waypoint ----------
+        if self.segment < len(self.path) - 1:
+            vec = self.path[self.segment + 1] - self.position
+            heading = vec.normalize() if vec.length() > 0 else pygame.math.Vector2(0,0)
+        else:
+            heading = pygame.math.Vector2(0,0)
+
+        # --- 2) Look for any “leader” ahead on the same converging lane ---
+        COS_THRESH = 0.99   # dot(heading, other_heading) ≥ this → same direction
+        for other in all_aircraft:
+            if other is self:
+                continue
+
+            # 2a) quick distance test
+            if self.distance_to(other) > LOCAL_SEP_RADIUS:
+                continue
+
+            # 2b) compute their heading too
+            if other.segment < len(other.path) - 1:
+                ov = other.path[other.segment + 1] - other.position
+                oheading = ov.normalize() if ov.length() > 0 else pygame.math.Vector2(0,0)
+            else:
+                continue
+
+            # 2c) only if nearly parallel
+            if heading.dot(oheading) < COS_THRESH:
+                continue
+
+            # 2d) projection: along > 0 means other is in front
+            rel = other.position - self.position
+            along = rel.dot(heading)
+            if along > 0:
+                # clamp so I never overtake
+                self.target_speed = min(self.target_speed, other.speed - 10)
+
+        # --- 3) accelerate/decelerate toward this (possibly clamped) target_speed ---
         if self.speed < self.target_speed:
             self.speed = min(self.target_speed, self.speed + self.acceleration * dt)
         else:
             self.speed = max(self.target_speed, self.speed - self.acceleration * dt)
         self.speed = max(self.min_speed, min(self.max_speed, self.speed))
 
-        if self.segment >= len(self.path) - 1: return
-        target = self.path[self.segment + 1]
-        direction = target - self.position
-        dist_deg = direction.length()
+        # --- 4) finally, move along the path as before --------------------
+        if self.segment >= len(self.path) - 1:
+            return
+        nxt = self.path[self.segment + 1]
+        vec = nxt - self.position
+        dist_deg = vec.length()
         if dist_deg == 0:
             self.segment += 1
             return
         travel_deg = (self.speed * dt) / M_PER_DEG
         if travel_deg >= dist_deg:
-            self.position = target.copy()
+            self.position = nxt.copy()
             self.segment += 1
         else:
-            self.position += direction.normalize() * travel_deg
+            self.position += vec.normalize() * travel_deg
+
 
     def distance_to(self, other):
         lat1, lon1 = self.position.y, self.position.x
@@ -149,31 +188,8 @@ class GlobalPSO:
     def _simulate_cost(self, speeds):
         """
         Simulate trajectories under `speeds`, starting from each AC’s current
-        position. Enforce separation after t>0.
+        position. 
         """
-        # --- enforce follower‐≤‐leader on same approach path ---
-        if self.enforce_overtake:
-            # compute each AC's remaining distance to runway
-            rem = []
-            for i, ac in enumerate(self.acs):
-                cum = self.path_cumlens[i]
-                pts = self.path_pts[i]
-                seg = ac.segment
-                A = pts[seg]
-                P = ac.position
-                mean_lat = np.deg2rad((A.y + P.y)/2)
-                dlat = (P.y - A.y) * M_PER_DEG
-                dlon = (P.x - A.x) * M_PER_DEG * np.cos(mean_lat)
-                already = cum[seg] + np.hypot(dlat, dlon)
-                remaining = cum[-1] - already
-                rem.append(remaining)
-            rem = np.array(rem)
-            # impose: if AC i is ahead (rem[i]<rem[j]), then speeds[j] ≤ speeds[i]
-            for i in range(self.m):
-                for j in range(self.m):
-                    if rem[i] < rem[j] and speeds[j] > speeds[i]:
-                        return 1e9 + (speeds[j] - speeds[i])**2
-
         init_speeds = np.array([ac.speed for ac in self.acs])
         samples = np.arange(self.step_skip, self.horizon + 1, self.step_skip)
 
@@ -303,7 +319,7 @@ class ATCAgent:
                  min_sep, sep_weight, fuel_weight,
                  particles, w, c1, c2, iters,
                  global_horizon, global_step_skip,
-                 local_comm_radius, local_horizon, local_sep_weight):
+                 local_comm_radius, local_horizon, local_sep_weight, add_con_plot):
         self.min_speed          = min_speed
         self.max_speed          = max_speed
         self.accel              = accel
@@ -321,23 +337,24 @@ class ATCAgent:
         self.local_horizon      = local_horizon
         self.local_sep_weight   = local_sep_weight
 
-        plt.ion()
+        if add_con_plot:
+            plt.ion()
 
-        # ---- create a persistent figure/axis for GLOBAL PSO ----
-        self._g_fig, self._g_ax = plt.subplots(figsize=(5,3))
-        self._g_ax.set_title("Global PSO Convergence")
-        self._g_ax.set_xlabel("Iteration")
-        self._g_ax.set_ylabel("Best Cost")
-        self._g_ax.grid(True)
+            # ---- create a persistent figure/axis for GLOBAL PSO ----
+            self._g_fig, self._g_ax = plt.subplots(figsize=(5,3))
+            self._g_ax.set_title("Global PSO Convergence")
+            self._g_ax.set_xlabel("Iteration")
+            self._g_ax.set_ylabel("Best Cost")
+            self._g_ax.grid(True)
 
-        # ---- create a second persistent figure/axis for LOCAL PSO ----
-        self._l_fig, self._l_ax = plt.subplots(figsize=(5,3))
-        self._l_ax.set_title("Local PSO Convergence")
-        self._l_ax.set_xlabel("Iteration")
-        self._l_ax.set_ylabel("Best Cost")
-        self._l_ax.grid(True)
+            # ---- create a second persistent figure/axis for LOCAL PSO ----
+            self._l_fig, self._l_ax = plt.subplots(figsize=(5,3))
+            self._l_ax.set_title("Local PSO Convergence")
+            self._l_ax.set_xlabel("Iteration")
+            self._l_ax.set_ylabel("Best Cost")
+            self._l_ax.grid(True)
 
-    def communicate(self, aircraft_list, dt):
+    def communicate(self, aircraft_list, dt, add_con_plot):
         # select only unfinished aircraft
         acs = [ac for ac in aircraft_list if not ac.is_finished()]
         if len(acs) < 2: return
@@ -356,15 +373,16 @@ class ATCAgent:
         )
         global_speeds = global_pso.optimize()
 
-        # update the global plot
-        self._g_ax.clear()
-        self._g_ax.plot(global_pso.history, marker='o')
-        self._g_ax.set_title("Global PSO Convergence")
-        self._g_ax.set_xlabel("Iteration")
-        self._g_ax.set_ylabel("Best Cost")
-        self._g_ax.grid(True)
-        self._g_fig.canvas.draw()
-        self._g_fig.canvas.flush_events()
+        if add_con_plot:
+            # update the global plot
+            self._g_ax.clear()
+            self._g_ax.plot(global_pso.history, marker='o')
+            self._g_ax.set_title("Global PSO Convergence")
+            self._g_ax.set_xlabel("Iteration")
+            self._g_ax.set_ylabel("Best Cost")
+            self._g_ax.grid(True)
+            self._g_fig.canvas.draw()
+            self._g_fig.canvas.flush_events()
 
         for ac, s in zip(acs, global_speeds):
             ac.set_target_speed(s)
@@ -382,20 +400,21 @@ class ATCAgent:
                 self.w, self.c1, self.c2,
                 self.iters,
                 horizon_steps=self.local_horizon,
-                step_skip=1,
+                step_skip=3,
                 enforce_overtake=False    # ← turn on no‑overtake here
             )
             local_speeds = local_pso.optimize()
             
-            # update the local plot
-            self._l_ax.clear()
-            self._l_ax.plot(local_pso.history, marker='o')
-            self._l_ax.set_title("Local PSO Convergence")
-            self._l_ax.set_xlabel("Iteration")
-            self._l_ax.set_ylabel("Best Cost")
-            self._l_ax.grid(True)
-            self._l_fig.canvas.draw()
-            self._l_fig.canvas.flush_events()
+            if add_con_plot:
+                # update the local plot
+                self._l_ax.clear()
+                self._l_ax.plot(local_pso.history, marker='o')
+                self._l_ax.set_title("Local PSO Convergence")
+                self._l_ax.set_xlabel("Iteration")
+                self._l_ax.set_ylabel("Best Cost")
+                self._l_ax.grid(True)
+                self._l_fig.canvas.draw()
+                self._l_fig.canvas.flush_events()
             
             for ac, s in zip(cluster, local_speeds):
                 ac.set_target_speed(s)
@@ -447,7 +466,8 @@ class Visualization:
 
 def runme(paths_dict,
           sim_duration=3600.0,
-          visualize=False,
+          visualize=True,
+          add_con_plot = True,
           width=1024,
           height=768,
           initial_speed=100.0,
@@ -470,13 +490,14 @@ def runme(paths_dict,
           step_skip=20,
           local_comm_radius=20000,
           local_horizon=40,
-          local_sep_weight=10000.0):
+          local_sep_weight=10000.0, 
+          LOCAL_SEP_RADIUS = 5000):
     
     atc = ATCAgent(min_speed, max_speed, acceleration,
                    min_sep, sep_weight, fuel_weight,
                    pso_particles, pso_w, pso_c1, pso_c2, pso_iters,
                    horizon_steps, step_skip,
-                   local_comm_radius, local_horizon, local_sep_weight)
+                   local_comm_radius, local_horizon, local_sep_weight, add_con_plot)
     
     aircraft_list = []
     spawn_t = pso_t = sim_t = 0.0
@@ -499,10 +520,10 @@ def runme(paths_dict,
             spawn_t -= spawn_interval
         pso_t += dt
         if pso_t >= pso_interval:
-            atc.communicate(aircraft_list, dt)
+            atc.communicate(aircraft_list, dt, add_con_plot)
             pso_t -= pso_interval
         for ac in aircraft_list[:]:
-            ac.update(dt)
+            ac.update(dt, aircraft_list, LOCAL_SEP_RADIUS)
             if ac.is_finished():
                 aircraft_list.remove(ac)
                 # print(f'Aircraft landed')
@@ -528,29 +549,31 @@ if __name__ == '__main__':
         paths_dict=paths_dict,
     sim_duration=20000.0,
     visualize=True,
+    add_con_plot = True,
     width=1024,
     height=768,
     initial_speed=100.0,
     acceleration=0.5,
     min_speed=80.0,
     max_speed=130.0,
-    spawn_interval=300.0,
+    spawn_interval=400.0,
     pso_interval=50.0,
     time_scale=100.0,
     fps=30,
     min_sep=3000.0,
     sep_weight=1,
     fuel_weight=0,
-    pso_particles=30,
+    pso_particles=100,
     pso_w=0.643852371671638,
     pso_c1=1.5066396693442399,
     pso_c2=1.7414431113477675,
-    pso_iters=15,
+    pso_iters=6,
     horizon_steps=3000,
-    step_skip=10,
+    step_skip=20,
     local_comm_radius=20000,
     local_horizon=40,
-    local_sep_weight=10000.0
+    local_sep_weight=10000.0, 
+    LOCAL_SEP_RADIUS = 6000
     )
 
     results = []
@@ -567,7 +590,7 @@ if __name__ == '__main__':
     coll_mean, coll_std = collisions.mean(), collisions.std(ddof=1)
     thr_mean, thr_std   = throughput.mean(), throughput.std(ddof=1)
 
-    print("\nSummary over 5 runs:")
+    print("\nSummary over runs:")
     print(f"  Collisions: mean = {coll_mean:.2f}, std = {coll_std:.2f}")
     print(f"  Throughput: mean = {thr_mean:.2f}, std = {thr_std:.2f}")
 
