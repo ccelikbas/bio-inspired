@@ -60,7 +60,7 @@ class Aircraft:
         self.target_speed = max(self.min_speed, min(self.max_speed, new_speed))
 
     def update(self, dt, all_aircraft, LOCAL_SEP_RADIUS):
-        # --- 1) Compute my heading vector to next waypoint ----------
+        # 1) Compute my heading vector to next waypoint
         if self.segment < len(self.path) - 1:
             vec     = self.path[self.segment + 1] - self.position
             heading = vec.normalize() if vec.length() > 0 else pygame.math.Vector2(0,0)
@@ -127,7 +127,7 @@ class Aircraft:
 
                 if d_self > d_other:
                     # print(f'airfraft {self.id} is slowing down due to intersection colision with aircraft {other.id}')
-                    self.target_speed = min(self.target_speed, other.speed - 10)
+                    self.target_speed = min(self.target_speed, other.speed - 15)
                 
                 if d_self > d_other:
                     # I’m follower → slow to other.speed
@@ -236,7 +236,7 @@ class GlobalPSO:
 
     def _simulate_cost(self, speeds):
         """
-        Simulate trajectories under `speeds`, starting from each AC’s current
+        Simulate trajectories under `speeds`, starting from each AC's current
         position. 
         """
         init_speeds = np.array([ac.speed for ac in self.acs])
@@ -616,7 +616,7 @@ if __name__ == '__main__':
     pso_w=0.643852371671638,
     pso_c1=1.5066396693442399,
     pso_c2=1.7414431113477675,
-    pso_iters=10,
+    pso_iters=6,
     horizon_steps=3000,
     step_skip=20,
     local_comm_radius=20000,
@@ -626,7 +626,7 @@ if __name__ == '__main__':
     )
 
     results = []
-    for i in range(10):
+    for i in range(20):
         res = runme(**sim_kwargs)
         print(f"Run {i+1}: collisions={res['collisions']}, throughput={res['throughput']}")
         results.append(res)
