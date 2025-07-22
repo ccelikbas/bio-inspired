@@ -62,10 +62,12 @@ class Aircraft:
     def update(self, dt, all_aircraft, LOCAL_SEP_RADIUS):
         # --- 1) Compute my heading vector to next waypoint ----------
         if self.segment < len(self.path) - 1:
-            vec = self.path[self.segment + 1] - self.position
+            vec     = self.path[self.segment + 1] - self.position
             heading = vec.normalize() if vec.length() > 0 else pygame.math.Vector2(0,0)
+            my_next = self.path[self.segment + 1]
         else:
             heading = pygame.math.Vector2(0,0)
+            my_next = None
 
         # --- 2) Look for any “leader” ahead on the same converging lane ---
         COS_THRESH = 0.99   # dot(heading, other_heading) ≥ this → same direction
@@ -93,7 +95,54 @@ class Aircraft:
             along = rel.dot(heading)
             if along > 0:
                 # clamp so I never overtake
-                self.target_speed = min(self.target_speed, other.speed - 10)
+                self.target_speed = min(self.target_speed, other.speed - 5)
+
+                other.target_speed = min(other.max_speed, other.target_speed + 5)
+
+        # Intersection‑yield rule
+        # only if both have a “next” waypoint
+        if my_next is not None:
+            for other in all_aircraft:
+                if other is self or other.segment >= len(other.path) - 1:
+                    continue
+
+                their_next = other.path[other.segment + 1]
+                # 3a) same next waypoint?
+                if (their_next - my_next).length() > 1e-4:
+                    continue
+
+                # 3b) different heading? (not parallel)
+                ov       = their_next - other.position
+                oheading = ov.normalize() if ov.length() > 0 else pygame.math.Vector2(0,0)
+                if heading.dot(oheading) > COS_THRESH:
+                    continue
+
+                # 3c) proximity check (3× LOCAL_SEP_RADIUS)
+                if self.distance_to(other) > 5 * LOCAL_SEP_RADIUS:
+                    continue
+
+                # check who is farther from next node
+                d_self  = (my_next - self.position).length() * M_PER_DEG
+                d_other = (their_next - other.position).length() * M_PER_DEG
+
+                if d_self > d_other:
+                    # print(f'airfraft {self.id} is slowing down due to intersection colision with aircraft {other.id}')
+                    self.target_speed = min(self.target_speed, other.speed - 10)
+                
+                if d_self > d_other:
+                    # I’m follower → slow to other.speed
+                    self.target_speed = min(self.target_speed, other.speed - 5)
+                    # other’s lead → boost up
+                    other.target_speed = min(other.max_speed,
+                                             other.target_speed + 5)
+                else:
+                    # I’m lead → boost me
+                    self.target_speed = min(self.max_speed,
+                                            self.target_speed + 5)
+                    # other slows
+                    other.target_speed = min(other.target_speed, self.speed - 5)
+
+                break
 
         # --- 3) accelerate/decelerate toward this (possibly clamped) target_speed ---
         if self.speed < self.target_speed:
@@ -548,15 +597,15 @@ if __name__ == '__main__':
     sim_kwargs = dict(
         paths_dict=paths_dict,
     sim_duration=20000.0,
-    visualize=True,
-    add_con_plot = True,
+    visualize=False,
+    add_con_plot = False,
     width=1024,
     height=768,
     initial_speed=100.0,
-    acceleration=0.5,
+    acceleration=1,
     min_speed=80.0,
     max_speed=130.0,
-    spawn_interval=400.0,
+    spawn_interval=300.0,
     pso_interval=50.0,
     time_scale=100.0,
     fps=30,
@@ -567,7 +616,7 @@ if __name__ == '__main__':
     pso_w=0.643852371671638,
     pso_c1=1.5066396693442399,
     pso_c2=1.7414431113477675,
-    pso_iters=6,
+    pso_iters=10,
     horizon_steps=3000,
     step_skip=20,
     local_comm_radius=20000,
