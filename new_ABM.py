@@ -5,6 +5,7 @@ import copy
 import bisect
 from paths import paths_dict
 import matplotlib.pyplot as plt
+import time 
 
 
 # approximate meters per degree latitude/longitude around Amsterdam
@@ -163,7 +164,7 @@ class Aircraft:
                 if heading.dot(oheading) > COS_THRESH:
                     continue
 
-                # 3c) proximity check (3× LOCAL_SEP_RADIUS)
+                # 3c) proximity check (LOCAL_SEP_RADIUS)
                 if self.distance_to(other) > 5 * LOCAL_SEP_RADIUS:
                     continue
 
@@ -175,18 +176,18 @@ class Aircraft:
                     # print(f'airfraft {self.id} is slowing down due to intersection colision with aircraft {other.id}')
                     self.target_speed = min(self.target_speed, other.speed - 15)
                 
-                if d_self > d_other:
-                    # I’m follower → slow to other.speed
-                    self.target_speed = min(self.target_speed, other.speed - 5)
-                    # other’s lead → boost up
-                    other.target_speed = min(other.max_speed,
-                                             other.target_speed + 5)
-                else:
-                    # I’m lead → boost me
-                    self.target_speed = min(self.max_speed,
-                                            self.target_speed + 5)
-                    # other slows
-                    other.target_speed = min(other.target_speed, self.speed - 5)
+                # if d_self > d_other:
+                #     # I’m follower → slow to other.speed
+                #     self.target_speed = min(self.target_speed, other.speed - 5)
+                #     # other’s lead → boost up
+                #     other.target_speed = min(other.max_speed,
+                #                              other.target_speed + 5)
+                # else:
+                #     # I’m lead → boost me
+                #     self.target_speed = min(self.max_speed,
+                #                             self.target_speed + 5)
+                #     # other slows
+                #     other.target_speed = min(other.target_speed, self.speed - 5)
 
                 break
 
@@ -529,6 +530,7 @@ class ATCAgent:
             for ac, sp in zip(cluster, l_speeds):
                 ac.set_target_speed(sp)
 
+
 def runme(paths_dict,
           sim_duration=3600.0,
           visualize=True,
@@ -565,7 +567,9 @@ def runme(paths_dict,
           l_sep_weight=10000.0,
           local_comm_radius=20000,
           LOCAL_SEP_RADIUS=5000):
-    
+    # KPI: start timing computation
+    start_time = time.perf_counter()
+
     atc = ATCAgent(
         min_speed, max_speed, acceleration,
         min_sep, sep_weight, fuel_weight,
@@ -573,10 +577,11 @@ def runme(paths_dict,
         g_particles, g_w, g_c1, g_c2, g_iters,
         g_horizon, g_step_skip,
         # local
-        l_particles, l_w, l_c1, l_c2, l_iters, l_horizon, l_step_skip, l_sep_weight,
+        l_particles, l_w, l_c1, l_c2, l_iters,
+        l_horizon, l_step_skip, l_sep_weight,
         local_comm_radius, add_con_plot
     )
-    
+
     aircraft_list = []
     spawn_t = pso_t = sim_t = 0.0
     collisions = throughput = 0
@@ -638,13 +643,161 @@ def runme(paths_dict,
     else:
         mean_arrival_gap = std_arrival_gap = min_arrival_gap = None
 
+    # KPI: total computation time
+    computation_time = time.perf_counter() - start_time
+
     return {
-        'collisions': collisions,
+        'separation_violations': collisions,
         'throughput': throughput,
         'mean_arrival_gap': mean_arrival_gap,
         'std_arrival_gap': std_arrival_gap,
-        'min_arrival_gap': min_arrival_gap
+        'min_arrival_gap': min_arrival_gap,
+        'computation_time': computation_time
     }
+
+
+
+# # -- Genetic Algorithm to tune PSO hyperparameters --
+# import random
+# import copy
+
+
+# sim_kwargs = dict(
+#     paths_dict=paths_dict,
+#     sim_duration=20000.0,
+#     visualize=False,
+#     add_con_plot=False,
+#     width=1024,
+#     height=768,
+#     initial_speed=100.0,
+#     acceleration=1,
+#     min_speed=80.0,
+#     max_speed=130.0,
+#     spawn_interval=300.0,
+#     pso_interval=50.0,
+#     time_scale=100.0,
+#     fps=30,
+#     min_sep=3000.0,
+#     sep_weight=1,
+#     fuel_weight=0,
+
+#     # -- Global PSO parameters -- 
+#     g_particles=75,
+#     g_w=0.45,
+#     g_c1=1.5066396693442399,
+#     g_c2=1.7414431113442399,
+#     g_iters=15,
+#     g_horizon=9000,
+#     g_step_skip=20,
+
+#     # -- Local PSO parameters --
+#     l_particles=20,
+#     l_w=0.4,
+#     l_c1=1.0,
+#     l_c2=1.5,
+#     l_iters=10,
+#     l_horizon=40,
+#     l_step_skip=3,
+#     l_sep_weight=10000.0,
+
+#     local_comm_radius=20000,
+#     LOCAL_SEP_RADIUS=6000
+# )
+
+# def random_genome():
+#     return {
+#         # Global PSO params
+#         'g_particles': random.randint(10, 100),
+#         'g_w': random.uniform(0.1, 1.0),
+#         'g_c1': random.uniform(0.5, 2.5),
+#         'g_c2': random.uniform(0.5, 2.5),
+#         'g_iters': random.randint(5, 30),
+#         # Local PSO params
+#         'l_particles': random.randint(5, 50),
+#         'l_w': random.uniform(0.1, 1.0),
+#         'l_c1': random.uniform(0.5, 2.5),
+#         'l_c2': random.uniform(0.5, 2.5),
+#         'l_iters': random.randint(3, 20)
+#     }
+
+# def mutate(genome, rate=0.2):
+#     for key in ('g_w','g_c1','g_c2','l_w','l_c1','l_c2'):
+#         if random.random() < rate:
+#             genome[key] += random.uniform(-0.1, 0.1)
+#             genome[key] = max(0.0, min(3.0, genome[key]))
+#     for key, lo, hi in (
+#         ('g_particles', 10, 100), ('g_iters', 5, 30),
+#         ('l_particles', 5, 50), ('l_iters', 3, 20)
+#     ):
+#         if random.random() < rate:
+#             genome[key] += random.choice([-1,1])
+#             genome[key] = max(lo, min(hi, genome[key]))
+
+# def fitness(genome):
+#     # override sim_kwargs for PSO settings
+#     params = {
+#         **sim_kwargs,
+#         'visualize': False,
+#         # global
+#         'g_particles': genome['g_particles'],
+#         'g_w': genome['g_w'],
+#         'g_c1': genome['g_c1'],
+#         'g_c2': genome['g_c2'],
+#         'g_iters': genome['g_iters'],
+#         # local
+#         'l_particles': genome['l_particles'],
+#         'l_w': genome['l_w'],
+#         'l_c1': genome['l_c1'],
+#         'l_c2': genome['l_c2'],
+#         'l_iters': genome['l_iters']
+#     }
+#     res = runme(**params)
+#     # minimize separation_violations (weighted) and computation_time
+#     score = - (100 * res['separation_violations'] + res['computation_time'])
+#     print(f"Genome {genome} -> sep={res['separation_violations']}, comp={res['computation_time']:.2f}, score={score:.2f}")
+#     return score
+
+# def evolve_population(pop_size=10, generations=6, retain=0.5, mutate_rate=0.2):
+#     population = [random_genome() for _ in range(pop_size)]
+#     for gen in range(generations):
+#         scored = sorted([(fitness(g), g) for g in population], key=lambda x: x[0], reverse=True)
+#         best_score, best_genome = scored[0]
+#         print(f"Generation {gen}: best={best_genome}, score={best_score:.2f}")
+#         retain_count = int(pop_size * retain)
+#         survivors = [g for _, g in scored[:retain_count]]
+#         population = []
+#         while len(population) < pop_size:
+#             parent = copy.deepcopy(random.choice(survivors))
+#             mutate(parent, rate=mutate_rate)
+#             population.append(parent)
+#     return best_genome
+
+# def main():
+#     best = evolve_population(pop_size=12, generations=8, retain=0.4, mutate_rate=0.3)
+#     print(f"Evolved hyperparameters: {best}")
+#     # final visual run with best genome
+#     final_params = {
+#         **sim_kwargs,
+#         'visualize': True,
+#         # global
+#         'g_particles': best['g_particles'],
+#         'g_w': best['g_w'],
+#         'g_c1': best['g_c1'],
+#         'g_c2': best['g_c2'],
+#         'g_iters': best['g_iters'],
+#         # local
+#         'l_particles': best['l_particles'],
+#         'l_w': best['l_w'],
+#         'l_c1': best['l_c1'],
+#         'l_c2': best['l_c2'],
+#         'l_iters': best['l_iters']
+#     }
+#     results = runme(**final_params)
+#     print("Final KPIs:", results)
+
+# if __name__ == '__main__':
+#     main()
+
 
 
 if __name__ == '__main__':
@@ -698,139 +851,38 @@ if __name__ == '__main__':
         res = runme(**sim_kwargs)
         print(
             f"Run {i+1}: "
-            f"collisions={res['collisions']}, "
+            f"separation_violations={res['separation_violations']}, "
             f"throughput={res['throughput']}, "
             f"mean_gap={res['mean_arrival_gap']:.1f}s, "
             f"std_gap={res['std_arrival_gap']:.1f}s, "
-            f"min_gap={res['min_arrival_gap']:.1f}s"
-            if res['mean_arrival_gap'] is not None else 
-            f"Run {i+1}: insufficient arrivals for gap metrics"
+            f"min_gap={res['min_arrival_gap']:.1f}s, "
+            f"comp_time={res['computation_time']:.2f}s"
         )
         results.append(res)
 
     # extract metrics as numpy arrays
-    collisions = np.array([r['collisions'] for r in results])
+    sep_viol = np.array([r['separation_violations'] for r in results])
     throughput = np.array([r['throughput'] for r in results])
-    mean_gaps = np.array([r['mean_arrival_gap'] for r in results if r['mean_arrival_gap'] is not None])
-    std_gaps  = np.array([r['std_arrival_gap'] for r in results if r['std_arrival_gap'] is not None])
-    min_gaps  = np.array([r['min_arrival_gap'] for r in results if r['min_arrival_gap'] is not None])
+    mean_gaps  = np.array([r['mean_arrival_gap'] for r in results])
+    std_gaps   = np.array([r['std_arrival_gap'] for r in results])
+    min_gaps   = np.array([r['min_arrival_gap'] for r in results])
+    comp_times = np.array([r['computation_time'] for r in results])
 
     # compute statistics
-    coll_mean, coll_std = collisions.mean(), collisions.std(ddof=1)
-    thr_mean, thr_std   = throughput.mean(), throughput.std(ddof=1)
-    
+    sep_mean, sep_std = sep_viol.mean(), sep_viol.std(ddof=1)
+    thr_mean, thr_std = throughput.mean(), throughput.std(ddof=1)
+    comp_mean, comp_std = comp_times.mean(), comp_times.std(ddof=1)
+
     print("\nSummary over runs:")
-    print(f"  Collisions: mean = {coll_mean:.2f}, std = {coll_std:.2f}")
-    print(f"  Throughput: mean = {thr_mean:.2f}, std = {thr_std:.2f}")
-    
+    print(f"  Separation Violations: mean = {sep_mean:.2f}, std = {sep_std:.2f}")
+    print(f"  Throughput:            mean = {thr_mean:.2f}, std = {thr_std:.2f}")
+    print(f"  Comp. Time (s):        mean = {comp_mean:.2f}, std = {comp_std:.2f}")
+
     if len(mean_gaps) > 0:
-        print(f"  Mean Arrival Gap: mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
-        print(f"  Std Arrival Gap:  mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
-        print(f"  Min Arrival Gap:  mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
+        print(f"  Mean Arrival Gap:      mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
+        print(f"  Std Arrival Gap:       mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
+        print(f"  Min Arrival Gap:       mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
     else:
         print("  Not enough arrivals to compute gap statistics.")
 
 
-# import random
-# import copy
-# sim_kwargs = dict(
-#     paths_dict=paths_dict,
-#     sim_duration=20000.0,
-#     visualize=False,
-#     width=1024,
-#     height=768,
-#     initial_speed=100.0,
-#     acceleration=0.5,
-#     min_speed=80.0,
-#     max_speed=130.0,
-#     spawn_interval=400.0,
-#     pso_interval=50.0,
-#     time_scale=100.0,
-#     fps=30,
-#     min_sep=3000.0,
-#     sep_weight=100,
-#     fuel_weight=1,
-#     pso_particles=50,
-#     pso_w=0.643852371671638,
-#     pso_c1=1.5066396693442399,
-#     pso_c2=1.7414431113477675,
-#     pso_iters=30,
-#     horizon_steps=3000,
-#     step_skip=20,
-#     local_comm_radius=20000,
-#     local_horizon=40,
-#     local_sep_weight=10000.0
-# )
-
-
-# def random_genome():
-#     return {
-#         'w':            random.uniform(0.1, 1.0),
-#         'c1':           random.uniform(0.5, 2.5),
-#         'c2':           random.uniform(0.5, 2.5),
-#         'n_particles':  random.randint(5, 30),
-#         'max_iter':     random.randint(5, 50),
-#     }
-
-# def mutate(genome, rate=0.2):
-#     # mutate floats
-#     for key in ('w','c1','c2'):
-#         if random.random() < rate:
-#             genome[key] += random.uniform(-0.1, 0.1)
-#             genome[key] = max(0.0, min(3.0, genome[key]))
-#     # mutate ints
-#     for key, lo, hi in (('n_particles',5,30), ('max_iter',5,50)):
-#         if random.random() < rate:
-#             genome[key] += random.choice([-1,1])
-#             genome[key] = max(lo, min(hi, genome[key]))
-
-# def fitness(genome):
-#     # override sim_kwargs with this genome’s PSO settings
-#     params = {
-#         **sim_kwargs,
-#         'visualize': False,
-#         'pso_particles': genome['n_particles'],
-#         'pso_w':         genome['w'],
-#         'pso_c1':        genome['c1'],
-#         'pso_c2':        genome['c2'],
-#         'pso_iters':     genome['max_iter']
-#     }
-#     res = runme(**params)
-#     score = res['throughput'] - 1000 * res['collisions']
-#     print(f"  {genome} → coll={res['collisions']}, thr={res['throughput']}, score={score}")
-#     return score
-
-# def evolve_population(pop_size=10, generations=5, retain=0.5, mutate_rate=0.2):
-#     population = [random_genome() for _ in range(pop_size)]
-#     for gen in range(generations):
-#         scored = sorted([(fitness(g), g) for g in population],
-#                         key=lambda x: x[0], reverse=True)
-#         best_score, best_genome = scored[0]
-#         print(f"Gen {gen}: best={best_genome} (score={best_score})")
-#         survivors = [g for _, g in scored[:int(pop_size * retain)]]
-#         # refill
-#         population = []
-#         while len(population) < pop_size:
-#             parent = copy.deepcopy(random.choice(survivors))
-#             mutate(parent, rate=mutate_rate)
-#             population.append(parent)
-#     return best_genome
-
-# def main():
-#     best = evolve_population(pop_size=8, generations=6, retain=0.5, mutate_rate=0.3)
-#     print(f"\nEvolved hyperparameters: {best}\n")
-#     # final visual run
-#     final_params = {
-#         **sim_kwargs,
-#         'visualize': True,
-#         'pso_particles': best['n_particles'],
-#         'pso_w':         best['w'],
-#         'pso_c1':        best['c1'],
-#         'pso_c2':        best['c2'],
-#         'pso_iters':     best['max_iter']
-#     }
-#     results = runme(**final_params)
-#     print("Final KPIs:", results)
-
-# if __name__ == "__main__":
-#     main()
