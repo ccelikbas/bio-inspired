@@ -529,6 +529,8 @@ class ATCAgent:
             for ac, sp in zip(cluster, l_speeds):
                 ac.set_target_speed(sp)
 
+import time
+
 def runme(paths_dict,
           sim_duration=3600.0,
           visualize=True,
@@ -565,7 +567,9 @@ def runme(paths_dict,
           l_sep_weight=10000.0,
           local_comm_radius=20000,
           LOCAL_SEP_RADIUS=5000):
-    
+
+    start_time = time.perf_counter()
+
     atc = ATCAgent(
         min_speed, max_speed, acceleration,
         min_sep, sep_weight, fuel_weight,
@@ -576,7 +580,7 @@ def runme(paths_dict,
         l_particles, l_w, l_c1, l_c2, l_iters, l_horizon, l_step_skip, l_sep_weight,
         local_comm_radius, add_con_plot
     )
-    
+
     aircraft_list = []
     spawn_t = pso_t = sim_t = 0.0
     collisions = throughput = 0
@@ -628,6 +632,9 @@ def runme(paths_dict,
     if visualize:
         pygame.quit()
 
+    end_time = time.perf_counter()
+    computation_time = end_time - start_time
+
     # KPI: Compute arrival spread
     arrival_times.sort()
     if len(arrival_times) >= 2:
@@ -643,59 +650,61 @@ def runme(paths_dict,
         'throughput': throughput,
         'mean_arrival_gap': mean_arrival_gap,
         'std_arrival_gap': std_arrival_gap,
-        'min_arrival_gap': min_arrival_gap
+        'min_arrival_gap': min_arrival_gap,
+        'computation_time': computation_time
     }
-
 
 if __name__ == '__main__':
     import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
 
     # parameters for the simulation
     sim_kwargs = dict(
-    paths_dict=paths_dict,
-    sim_duration=20000.0,
-    visualize=False,
-    add_con_plot=False,
-    width=1024,
-    height=768,
-    initial_speed=100.0,
-    acceleration=1,
-    min_speed=80.0,
-    max_speed=130.0,
-    spawn_interval=300.0,
-    pso_interval=50.0,
-    time_scale=100.0,
-    fps=30,
-    min_sep=3000.0,
-    sep_weight=1,
-    fuel_weight=0,
+        paths_dict=paths_dict,
+        sim_duration=20000.0,
+        visualize=False,
+        add_con_plot=False,
+        width=1024,
+        height=768,
+        initial_speed=100.0,
+        acceleration=1,
+        min_speed=80.0,
+        max_speed=130.0,
+        spawn_interval=300.0,
+        pso_interval=50.0,
+        time_scale=100.0,
+        fps=30,
+        min_sep=3000.0,
+        sep_weight=1,
+        fuel_weight=0,
 
-    # -- Global PSO parameters --
-    g_particles=75,
-    g_w=0.45,
-    g_c1=1.5066396693442399,
-    g_c2=1.7414431113442399,
-    g_iters=15,
-    g_horizon=9000,
-    g_step_skip=20,
+        # -- Global PSO parameters --
+        g_particles=75,
+        g_w=0.45,
+        g_c1=1.5066396693442399,
+        g_c2=1.7414431113442399,
+        g_iters=15,
+        g_horizon=9000,
+        g_step_skip=20,
 
-    # -- Local PSO parameters --
-    l_particles=20,
-    l_w=0.4,
-    l_c1=1.0,
-    l_c2=1.5,
-    l_iters=10,
-    l_horizon=300,
-    l_step_skip=10,
-    l_sep_weight=10000.0,
+        # -- Local PSO parameters --
+        l_particles=20,
+        l_w=0.4,
+        l_c1=1.0,
+        l_c2=1.5,
+        l_iters=10,
+        l_horizon=300,
+        l_step_skip=10,
+        l_sep_weight=10000.0,
 
-    local_comm_radius=20000,
-    LOCAL_SEP_RADIUS=6000
-)
+        local_comm_radius=20000,
+        LOCAL_SEP_RADIUS=6000
+    )
 
+    # run multiple simulations
     results = []
-    for i in range(20):
-        
+    for i in range(30):
         res = runme(**sim_kwargs)
         print(
             f"Run {i+1}: "
@@ -703,33 +712,53 @@ if __name__ == '__main__':
             f"throughput={res['throughput']}, "
             f"mean_gap={res['mean_arrival_gap']:.1f}s, "
             f"std_gap={res['std_arrival_gap']:.1f}s, "
-            f"min_gap={res['min_arrival_gap']:.1f}s"
-            if res['mean_arrival_gap'] is not None else 
-            f"Run {i+1}: insufficient arrivals for gap metrics"
+            f"min_gap={res['min_arrival_gap']:.1f}s, "
+            f"comp_time={res['computation_time']:.2f}s"
         )
         results.append(res)
 
-    # extract metrics as numpy arrays
+    # extract metrics
     collisions = np.array([r['collisions'] for r in results])
     throughput = np.array([r['throughput'] for r in results])
+    comp_times = np.array([r['computation_time'] for r in results])
     mean_gaps = np.array([r['mean_arrival_gap'] for r in results if r['mean_arrival_gap'] is not None])
     std_gaps  = np.array([r['std_arrival_gap'] for r in results if r['std_arrival_gap'] is not None])
     min_gaps  = np.array([r['min_arrival_gap'] for r in results if r['min_arrival_gap'] is not None])
 
-    # compute statistics
-    coll_mean, coll_std = collisions.mean(), collisions.std(ddof=1)
-    thr_mean, thr_std   = throughput.mean(), throughput.std(ddof=1)
-    
-    print("\nSummary over runs:")
-    print(f"  Collisions: mean = {coll_mean:.2f}, std = {coll_std:.2f}")
-    print(f"  Throughput: mean = {thr_mean:.2f}, std = {thr_std:.2f}")
-    
+    # assemble into dict for convenience
+    metrics = {
+        'Collisions':       collisions,
+        'Throughput':       throughput,
+        'Comp. Time (s)':   comp_times
+    }
     if len(mean_gaps) > 0:
-        print(f"  Mean Arrival Gap: mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
-        print(f"  Std Arrival Gap:  mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
-        print(f"  Min Arrival Gap:  mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
-    else:
-        print("  Not enough arrivals to compute gap statistics.")
+        metrics['Mean Arrival Gap (s)'] = mean_gaps
+        metrics['Std Arrival Gap (s)']  = std_gaps
+        metrics['Min Arrival Gap (s)']  = min_gaps
+
+    # build summary table
+    summary = []
+    for name, data in metrics.items():
+        summary.append({
+            'KPI':  name,
+            'Mean': data.mean(),
+            'Std':  data.std(ddof=1)
+        })
+    df_summary = pd.DataFrame(summary).set_index('KPI')
+
+    # print table
+    print("\nKPI Summary:")
+    print(df_summary.to_string(float_format="%.2f"))
+
+    # plot histograms
+    for name, data in metrics.items():
+        plt.figure()
+        plt.hist(data)
+        plt.title(f"Histogram of {name}")
+        plt.xlabel(name)
+        plt.ylabel("Frequency")
+        plt.show()
+
 
 
 # import random
