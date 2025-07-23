@@ -642,8 +642,8 @@ if __name__ == '__main__':
     sim_kwargs = dict(
         paths_dict=paths_dict,
         sim_duration=20000.0,
-        visualize=False,
-        add_con_plot=False,
+        visualize=True,
+        add_con_plot=True,
         width=1024,
         height=768,
         initial_speed=100.0,
@@ -678,10 +678,9 @@ if __name__ == '__main__':
         res['comp_time'] = time.perf_counter() - t0
 
         # Per‐run printout
-        sv = res['collisions']
         if res['mean_arrival_gap'] is not None:
             print(f"Run {i+1}: "
-                  f"separation_violations={sv}, "
+                  f"collisions={res['collisions']}, "
                   f"throughput={res['throughput']}, "
                   f"mean_gap={res['mean_arrival_gap']:.1f}s, "
                   f"std_gap={res['std_arrival_gap']:.1f}s, "
@@ -689,40 +688,42 @@ if __name__ == '__main__':
                   f"comp_time={res['comp_time']:.2f}s")
         else:
             print(f"Run {i+1}: insufficient arrivals for gap metrics, "
-                  f"separation_violations={sv}, "
                   f"comp_time={res['comp_time']:.2f}s")
 
         results.append(res)
 
     # Extract KPI arrays
-    sep_violations = np.array([r['collisions'] for r in results])
-    throughput     = np.array([r['throughput'] for r in results])
-    mean_gaps      = np.array([r['mean_arrival_gap'] for r in results if r['mean_arrival_gap'] is not None])
-    std_gaps       = np.array([r['std_arrival_gap'] for r in results if r['std_arrival_gap'] is not None])
-    min_gaps       = np.array([r['min_arrival_gap'] for r in results if r['min_arrival_gap'] is not None])
-    comp_times     = np.array([r['comp_time'] for r in results])
+    collisions = np.array([r['collisions']        for r in results])
+    throughput = np.array([r['throughput']        for r in results])
+    mean_gaps  = np.array([r['mean_arrival_gap']  for r in results
+                           if r['mean_arrival_gap'] is not None])
+    std_gaps   = np.array([r['std_arrival_gap']   for r in results
+                           if r['std_arrival_gap'] is not None])
+    min_gaps   = np.array([r['min_arrival_gap']   for r in results
+                           if r['min_arrival_gap'] is not None])
+    comp_times = np.array([r['comp_time']         for r in results])
 
     # Print overall summary
     print("\nSummary over 30 runs:")
-    print(f"  Separation Violations: mean = {sep_violations.mean():.2f}, std = {sep_violations.std(ddof=1):.2f}")
-    print(f"  Throughput:            mean = {throughput.mean():.2f}, std = {throughput.std(ddof=1):.2f}")
-    print(f"  Comp. Time:            mean = {comp_times.mean():.2f}s, std = {comp_times.std(ddof=1):.2f}s")
+    print(f"  Collisions:    mean = {collisions.mean():.2f}, std = {collisions.std(ddof=1):.2f}")
+    print(f"  Throughput:    mean = {throughput.mean():.2f}, std = {throughput.std(ddof=1):.2f}")
+    print(f"  Comp. Time:    mean = {comp_times.mean():.2f}s, std = {comp_times.std(ddof=1):.2f}s")
 
-    if mean_gaps.size > 0:
-        print(f"  Mean Arrival Gap:      mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
-        print(f"  Std Arrival Gap:       mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
-        print(f"  Min Arrival Gap:       mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
+    if len(mean_gaps) > 0:
+        print(f"  Mean Arrival Gap: mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
+        print(f"  Std Arrival Gap:  mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
+        print(f"  Min Arrival Gap:  mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
     else:
         print("  Not enough arrivals to compute gap statistics.")
 
     # Plot histograms for each KPI
     kpis = {
-        'Separation Violations': sep_violations,
-        'Throughput':            throughput,
-        'Mean Gap (s)':          mean_gaps,
-        'Std Gap (s)':           std_gaps,
-        'Min Gap (s)':           min_gaps,
-        'Comp Time (s)':         comp_times
+        'Collisions': collisions,
+        'Throughput': throughput,
+        'Mean Gap (s)': mean_gaps,
+        'Std Gap (s)': std_gaps,
+        'Min Gap (s)': min_gaps,
+        'Comp Time (s)': comp_times
     }
 
     for name, data in kpis.items():
@@ -732,4 +733,109 @@ if __name__ == '__main__':
         plt.xlabel(name)
         plt.ylabel("Frequency")
         plt.show()
+
+
+# import random
+# import copy
+# sim_kwargs = dict(
+#     paths_dict=paths_dict,
+#     sim_duration=20000.0,
+#     visualize=False,
+#     width=1024,
+#     height=768,
+#     initial_speed=100.0,
+#     acceleration=0.5,
+#     min_speed=80.0,
+#     max_speed=130.0,
+#     spawn_interval=400.0,
+#     pso_interval=50.0,
+#     time_scale=100.0,
+#     fps=30,
+#     min_sep=3000.0,
+#     sep_weight=100,
+#     fuel_weight=1,
+#     pso_particles=50,
+#     pso_w=0.643852371671638,
+#     pso_c1=1.5066396693442399,
+#     pso_c2=1.7414431113477675,
+#     pso_iters=30,
+#     horizon_steps=3000,
+#     step_skip=20,
+#     local_comm_radius=20000,
+#     local_horizon=40,
+#     local_sep_weight=10000.0
+# )
+
+
+# def random_genome():
+#     return {
+#         'w':            random.uniform(0.1, 1.0),
+#         'c1':           random.uniform(0.5, 2.5),
+#         'c2':           random.uniform(0.5, 2.5),
+#         'n_particles':  random.randint(5, 30),
+#         'max_iter':     random.randint(5, 50),
+#     }
+
+# def mutate(genome, rate=0.2):
+#     # mutate floats
+#     for key in ('w','c1','c2'):
+#         if random.random() < rate:
+#             genome[key] += random.uniform(-0.1, 0.1)
+#             genome[key] = max(0.0, min(3.0, genome[key]))
+#     # mutate ints
+#     for key, lo, hi in (('n_particles',5,30), ('max_iter',5,50)):
+#         if random.random() < rate:
+#             genome[key] += random.choice([-1,1])
+#             genome[key] = max(lo, min(hi, genome[key]))
+
+# def fitness(genome):
+#     # override sim_kwargs with this genome’s PSO settings
+#     params = {
+#         **sim_kwargs,
+#         'visualize': False,
+#         'pso_particles': genome['n_particles'],
+#         'pso_w':         genome['w'],
+#         'pso_c1':        genome['c1'],
+#         'pso_c2':        genome['c2'],
+#         'pso_iters':     genome['max_iter']
+#     }
+#     res = runme(**params)
+#     score = res['throughput'] - 1000 * res['collisions']
+#     print(f"  {genome} → coll={res['collisions']}, thr={res['throughput']}, score={score}")
+#     return score
+
+# def evolve_population(pop_size=10, generations=5, retain=0.5, mutate_rate=0.2):
+#     population = [random_genome() for _ in range(pop_size)]
+#     for gen in range(generations):
+#         scored = sorted([(fitness(g), g) for g in population],
+#                         key=lambda x: x[0], reverse=True)
+#         best_score, best_genome = scored[0]
+#         print(f"Gen {gen}: best={best_genome} (score={best_score})")
+#         survivors = [g for _, g in scored[:int(pop_size * retain)]]
+#         # refill
+#         population = []
+#         while len(population) < pop_size:
+#             parent = copy.deepcopy(random.choice(survivors))
+#             mutate(parent, rate=mutate_rate)
+#             population.append(parent)
+#     return best_genome
+
+# def main():
+#     best = evolve_population(pop_size=8, generations=6, retain=0.5, mutate_rate=0.3)
+#     print(f"\nEvolved hyperparameters: {best}\n")
+#     # final visual run
+#     final_params = {
+#         **sim_kwargs,
+#         'visualize': True,
+#         'pso_particles': best['n_particles'],
+#         'pso_w':         best['w'],
+#         'pso_c1':        best['c1'],
+#         'pso_c2':        best['c2'],
+#         'pso_iters':     best['max_iter']
+#     }
+#     results = runme(**final_params)
+#     print("Final KPIs:", results)
+
+# if __name__ == "__main__":
+#     main()
 
