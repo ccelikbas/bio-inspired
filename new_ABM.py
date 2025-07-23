@@ -44,52 +44,6 @@ def _find_clusters(acs, radius):
             clusters.append(comp)
     return clusters
 
-class Visualization:
-    
-    PALETTE=[(255,0,0),(0,255,0),(0,0,255),(255,255,0),(255,0,255),(0,255,255),
-             (128,0,128),(255,165,0),(0,128,128),(128,128,0)]
-    
-    def __init__(self,paths_dict,width,height,min_sep):
-        self.paths=paths_dict; self.width,self.height=width,height; self.min_sep=min_sep
-        self.lat_min=min(lat for p in paths_dict.values() for lat,lon in p)
-        self.lat_max=max(lat for p in paths_dict.values() for lat,lon in p)
-        self.lon_min=min(lon for p in paths_dict.values() for lat,lon in p)
-        self.lon_max=max(lon for p in paths_dict.values() for lat,lon in p)
-        self.sep_radius_px=int(min_sep/M_PER_DEG*(width/(self.lon_max-self.lon_min)))
-        pygame.init(); self.screen=pygame.display.set_mode((width,height))
-        self.font=pygame.font.SysFont(None,20); self.aircraft_list=[]
-
-    def _geo_to_px(self,lat,lon):
-        x=(lon-self.lon_min)/(self.lon_max-self.lon_min)*self.width
-        y=self.height-(lat-self.lat_min)/(self.lat_max-self.lat_min)*self.height
-        return int(x),int(y)
-
-    def draw(self,sim_time):
-        self.screen.fill((255,255,255))
-        active={ac.path_id for ac in self.aircraft_list}
-        for pid in active:
-            pts=[self._geo_to_px(lat,lon) for lat,lon in self.paths[pid]]
-            if len(pts)>1: pygame.draw.lines(self.screen,(200,200,200),False,pts,2)
-        clusters=_find_clusters(self.aircraft_list,
-                                self.sep_radius_px*M_PER_DEG/self.width*(self.lon_max-self.lon_min))
-        cmap={ac.id:i for i,cl in enumerate(clusters) for ac in cl}
-        conflicts={ac.id for i,ac in enumerate(self.aircraft_list)
-                   for other in self.aircraft_list[i+1:]
-                   if ac.distance_to(other)<self.min_sep}
-        for ac in self.aircraft_list:
-            x,y=self._geo_to_px(ac.position.y,ac.position.x)
-            if ac.id in conflicts: color=(255,0,0)
-            elif ac.id in cmap: color=Visualization.PALETTE[cmap[ac.id]%len(Visualization.PALETTE)]
-            else: color=(0,0,0)
-            pygame.draw.circle(self.screen,color,(x,y),4)
-            lbl=self.font.render(f"{ac.id}|{ac.speed:.0f}",True,color)
-            self.screen.blit(lbl,(x+10,y+6))
-            pygame.draw.circle(self.screen,color,(x,y),self.sep_radius_px,1)
-        timg=self.font.render(f"Time:{sim_time:.1f}s",True,(0,0,0))
-        self.screen.blit(timg,(10,10)); pygame.display.flip()
-
-
-
 class Aircraft:
     next_id = 1
     def __init__(self, path_id, path, initial_speed, acceleration, min_speed, max_speed):
@@ -428,51 +382,37 @@ class ATCAgent:
     def __init__(self,
                  min_speed, max_speed, accel,
                  min_sep, sep_weight, fuel_weight,
-                 # Global PSO params
-                 g_particles, g_w, g_c1, g_c2, g_iters,
-                 g_horizon, g_step_skip,
-                 # Local PSO params
-                 l_particles, l_w, l_c1, l_c2, l_iters,
-                 l_horizon, l_step_skip, l_sep_weight,
-                 local_comm_radius, add_con_plot):
-        # common aircraft settings
-        self.min_speed = min_speed
-        self.max_speed = max_speed
-        self.accel = accel
-        self.min_sep = min_sep
-        self.sep_weight = sep_weight
-        self.fuel_weight = fuel_weight
+                 particles, w, c1, c2, iters,
+                 global_horizon, global_step_skip,
+                 local_comm_radius, local_horizon, local_sep_weight, add_con_plot):
+        self.min_speed          = min_speed
+        self.max_speed          = max_speed
+        self.accel              = accel
+        self.min_sep            = min_sep
+        self.sep_weight         = sep_weight
+        self.fuel_weight        = fuel_weight
+        self.particles          = particles
+        self.w                  = w
+        self.c1                 = c1
+        self.c2                 = c2
+        self.iters              = iters
+        self.global_horizon     = global_horizon
+        self.global_step_skip   = global_step_skip
+        self.local_comm_radius  = local_comm_radius
+        self.local_horizon      = local_horizon
+        self.local_sep_weight   = local_sep_weight
 
-        # global PSO settings
-        self.g_particles = g_particles
-        self.g_w = g_w
-        self.g_c1 = g_c1
-        self.g_c2 = g_c2
-        self.g_iters = g_iters
-        self.g_horizon = g_horizon
-        self.g_step_skip = g_step_skip
-
-        # local PSO settings
-        self.l_particles = l_particles
-        self.l_w = l_w
-        self.l_c1 = l_c1
-        self.l_c2 = l_c2
-        self.l_iters = l_iters
-        self.l_horizon = l_horizon
-        self.l_step_skip = l_step_skip
-        self.l_sep_weight = l_sep_weight
-
-        # clustering radius and plotting
-        self.local_comm_radius = local_comm_radius
         if add_con_plot:
             plt.ion()
-            # Global plot canvas
+
+            # ---- create a persistent figure/axis for GLOBAL PSO ----
             self._g_fig, self._g_ax = plt.subplots(figsize=(5,3))
             self._g_ax.set_title("Global PSO Convergence")
             self._g_ax.set_xlabel("Iteration")
             self._g_ax.set_ylabel("Best Cost")
             self._g_ax.grid(True)
-            # Local plot canvas
+
+            # ---- create a second persistent figure/axis for LOCAL PSO ----
             self._l_fig, self._l_ax = plt.subplots(figsize=(5,3))
             self._l_ax.set_title("Local PSO Convergence")
             self._l_ax.set_xlabel("Iteration")
@@ -480,61 +420,119 @@ class ATCAgent:
             self._l_ax.grid(True)
 
     def communicate(self, aircraft_list, dt, add_con_plot):
+        # select only unfinished aircraft
         acs = [ac for ac in aircraft_list if not ac.is_finished()]
-        if len(acs) < 2:
-            return
+        if len(acs) < 2: return
 
-        # -- Global PSO --
-        g_pso = GlobalPSO(
+        # GLOBAL PSO over all ACs
+        global_pso = GlobalPSO(
             acs,
             self.min_speed, self.max_speed,
             dt, self.min_sep,
             self.sep_weight, self.fuel_weight,
-            self.g_particles,
-            self.g_w, self.g_c1, self.g_c2,
-            self.g_iters,
-            horizon_steps=self.g_horizon,
-            step_skip=self.g_step_skip
+            self.particles,
+            self.w, self.c1, self.c2,
+            self.iters,
+            horizon_steps=self.global_horizon,
+            step_skip=self.global_step_skip
         )
-        g_speeds = g_pso.optimize()
-        if add_con_plot:
-            self._g_ax.clear()
-            self._g_ax.plot(g_pso.history, marker='o')
-            self._g_ax.set_title("Global PSO Convergence")
-            self._g_fig.canvas.draw(); self._g_fig.canvas.flush_events()
-        for ac, sp in zip(acs, g_speeds):
-            ac.set_target_speed(sp)
+        global_speeds = global_pso.optimize()
 
-        # -- Local PSO per cluster --
+        if add_con_plot:
+            # update the global plot
+            self._g_ax.clear()
+            self._g_ax.plot(global_pso.history, marker='o')
+            self._g_ax.set_title("Global PSO Convergence")
+            self._g_ax.set_xlabel("Iteration")
+            self._g_ax.set_ylabel("Best Cost")
+            self._g_ax.grid(True)
+            self._g_fig.canvas.draw()
+            self._g_fig.canvas.flush_events()
+
+        for ac, s in zip(acs, global_speeds):
+            ac.set_target_speed(s)
+        
+        # LOCAL PSO on any clusters within local_comm_radius
         clusters = _find_clusters(acs, self.local_comm_radius)
+        # print("Local clusters:", [[ac.id for ac in c] for c in clusters])
         for cluster in clusters:
-            l_pso = GlobalPSO(
+            local_pso = GlobalPSO(
                 cluster,
                 self.min_speed, self.max_speed,
                 dt, self.min_sep,
-                self.l_sep_weight, self.fuel_weight,
-                self.l_particles,
-                self.l_w, self.l_c1, self.l_c2,
-                self.l_iters,
-                horizon_steps=self.l_horizon,
-                step_skip=self.l_step_skip,
-                enforce_overtake=False
+                self.local_sep_weight, self.fuel_weight,
+                max(10, len(cluster)*2),
+                self.w, self.c1, self.c2,
+                self.iters,
+                horizon_steps=self.local_horizon,
+                step_skip=3,
+                enforce_overtake=False    # ← turn on no‑overtake here
             )
-            l_speeds = l_pso.optimize()
+            local_speeds = local_pso.optimize()
+            
             if add_con_plot:
+                # update the local plot
                 self._l_ax.clear()
-                self._l_ax.plot(l_pso.history, marker='o')
+                self._l_ax.plot(local_pso.history, marker='o')
                 self._l_ax.set_title("Local PSO Convergence")
-                self._l_fig.canvas.draw(); self._l_fig.canvas.flush_events()
-            for ac, sp in zip(cluster, l_speeds):
-                ac.set_target_speed(sp)
+                self._l_ax.set_xlabel("Iteration")
+                self._l_ax.set_ylabel("Best Cost")
+                self._l_ax.grid(True)
+                self._l_fig.canvas.draw()
+                self._l_fig.canvas.flush_events()
+            
+            for ac, s in zip(cluster, local_speeds):
+                ac.set_target_speed(s)
 
-import time
+
+class Visualization:
+    
+    PALETTE=[(255,0,0),(0,255,0),(0,0,255),(255,255,0),(255,0,255),(0,255,255),
+             (128,0,128),(255,165,0),(0,128,128),(128,128,0)]
+    
+    def __init__(self,paths_dict,width,height,min_sep):
+        self.paths=paths_dict; self.width,self.height=width,height; self.min_sep=min_sep
+        self.lat_min=min(lat for p in paths_dict.values() for lat,lon in p)
+        self.lat_max=max(lat for p in paths_dict.values() for lat,lon in p)
+        self.lon_min=min(lon for p in paths_dict.values() for lat,lon in p)
+        self.lon_max=max(lon for p in paths_dict.values() for lat,lon in p)
+        self.sep_radius_px=int(min_sep/M_PER_DEG*(width/(self.lon_max-self.lon_min)))
+        pygame.init(); self.screen=pygame.display.set_mode((width,height))
+        self.font=pygame.font.SysFont(None,20); self.aircraft_list=[]
+
+    def _geo_to_px(self,lat,lon):
+        x=(lon-self.lon_min)/(self.lon_max-self.lon_min)*self.width
+        y=self.height-(lat-self.lat_min)/(self.lat_max-self.lat_min)*self.height
+        return int(x),int(y)
+
+    def draw(self,sim_time):
+        self.screen.fill((255,255,255))
+        active={ac.path_id for ac in self.aircraft_list}
+        for pid in active:
+            pts=[self._geo_to_px(lat,lon) for lat,lon in self.paths[pid]]
+            if len(pts)>1: pygame.draw.lines(self.screen,(200,200,200),False,pts,2)
+        clusters=_find_clusters(self.aircraft_list,
+                                self.sep_radius_px*M_PER_DEG/self.width*(self.lon_max-self.lon_min))
+        cmap={ac.id:i for i,cl in enumerate(clusters) for ac in cl}
+        conflicts={ac.id for i,ac in enumerate(self.aircraft_list)
+                   for other in self.aircraft_list[i+1:]
+                   if ac.distance_to(other)<self.min_sep}
+        for ac in self.aircraft_list:
+            x,y=self._geo_to_px(ac.position.y,ac.position.x)
+            if ac.id in conflicts: color=(255,0,0)
+            elif ac.id in cmap: color=Visualization.PALETTE[cmap[ac.id]%len(Visualization.PALETTE)]
+            else: color=(0,0,0)
+            pygame.draw.circle(self.screen,color,(x,y),4)
+            lbl=self.font.render(f"{ac.id}|{ac.speed:.0f}",True,color)
+            self.screen.blit(lbl,(x+10,y+6))
+            pygame.draw.circle(self.screen,color,(x,y),self.sep_radius_px,1)
+        timg=self.font.render(f"Time:{sim_time:.1f}s",True,(0,0,0))
+        self.screen.blit(timg,(10,10)); pygame.display.flip()
 
 def runme(paths_dict,
           sim_duration=3600.0,
           visualize=True,
-          add_con_plot=True,
+          add_con_plot = True,
           width=1024,
           height=768,
           initial_speed=100.0,
@@ -548,39 +546,24 @@ def runme(paths_dict,
           min_sep=3000.0,
           sep_weight=100,
           fuel_weight=1,
-          # global PSO args
-          g_particles=24,
-          g_w=0.5,
-          g_c1=1.2,
-          g_c2=1.2,
-          g_iters=24,
-          g_horizon=3000,
-          g_step_skip=20,
-          # local PSO args
-          l_particles=10,
-          l_w=0.4,
-          l_c1=1.0,
-          l_c2=1.5,
-          l_iters=12,
-          l_horizon=40,
-          l_step_skip=3,
-          l_sep_weight=10000.0,
+          pso_particles=24,
+          pso_w=0.5,
+          pso_c1=1.2,
+          pso_c2=1.2,
+          pso_iters=24,
+          horizon_steps=3000,
+          step_skip=20,
           local_comm_radius=20000,
-          LOCAL_SEP_RADIUS=5000):
-
-    start_time = time.perf_counter()
-
-    atc = ATCAgent(
-        min_speed, max_speed, acceleration,
-        min_sep, sep_weight, fuel_weight,
-        # global
-        g_particles, g_w, g_c1, g_c2, g_iters,
-        g_horizon, g_step_skip,
-        # local
-        l_particles, l_w, l_c1, l_c2, l_iters, l_horizon, l_step_skip, l_sep_weight,
-        local_comm_radius, add_con_plot
-    )
-
+          local_horizon=40,
+          local_sep_weight=10000.0, 
+          LOCAL_SEP_RADIUS = 5000):
+    
+    atc = ATCAgent(min_speed, max_speed, acceleration,
+                   min_sep, sep_weight, fuel_weight,
+                   pso_particles, pso_w, pso_c1, pso_c2, pso_iters,
+                   horizon_steps, step_skip,
+                   local_comm_radius, local_horizon, local_sep_weight, add_con_plot)
+    
     aircraft_list = []
     spawn_t = pso_t = sim_t = 0.0
     collisions = throughput = 0
@@ -632,9 +615,6 @@ def runme(paths_dict,
     if visualize:
         pygame.quit()
 
-    end_time = time.perf_counter()
-    computation_time = end_time - start_time
-
     # KPI: Compute arrival spread
     arrival_times.sort()
     if len(arrival_times) >= 2:
@@ -650,16 +630,15 @@ def runme(paths_dict,
         'throughput': throughput,
         'mean_arrival_gap': mean_arrival_gap,
         'std_arrival_gap': std_arrival_gap,
-        'min_arrival_gap': min_arrival_gap,
-        'computation_time': computation_time
+        'min_arrival_gap': min_arrival_gap
     }
 
 if __name__ == '__main__':
+    import time
     import numpy as np
-    import pandas as pd
     import matplotlib.pyplot as plt
 
-    # parameters for the simulation
+    # Simulation parameters
     sim_kwargs = dict(
         paths_dict=paths_dict,
         sim_duration=20000.0,
@@ -678,189 +657,79 @@ if __name__ == '__main__':
         min_sep=3000.0,
         sep_weight=1,
         fuel_weight=0,
-
-        # -- Global PSO parameters --
-        g_particles=75,
-        g_w=0.45,
-        g_c1=1.5066396693442399,
-        g_c2=1.7414431113442399,
-        g_iters=15,
-        g_horizon=9000,
-        g_step_skip=20,
-
-        # -- Local PSO parameters --
-        l_particles=20,
-        l_w=0.4,
-        l_c1=1.0,
-        l_c2=1.5,
-        l_iters=10,
-        l_horizon=300,
-        l_step_skip=10,
-        l_sep_weight=10000.0,
-
+        pso_particles=100,
+        pso_w=0.643852371671638,
+        pso_c1=1.5066396693442399,
+        pso_c2=1.7414431113477675,
+        pso_iters=20,
+        horizon_steps=3000,
+        step_skip=20,
         local_comm_radius=20000,
+        local_horizon=40,
+        local_sep_weight=10000.0,
         LOCAL_SEP_RADIUS=6000
     )
 
-    # run multiple simulations
+    # Run the simulation multiple times, measuring compute time
     results = []
     for i in range(30):
+        t0 = time.perf_counter()
         res = runme(**sim_kwargs)
-        print(
-            f"Run {i+1}: "
-            f"collisions={res['collisions']}, "
-            f"throughput={res['throughput']}, "
-            f"mean_gap={res['mean_arrival_gap']:.1f}s, "
-            f"std_gap={res['std_arrival_gap']:.1f}s, "
-            f"min_gap={res['min_arrival_gap']:.1f}s, "
-            f"comp_time={res['computation_time']:.2f}s"
-        )
+        res['comp_time'] = time.perf_counter() - t0
+
+        # Per‐run printout
+        sv = res['collisions']
+        if res['mean_arrival_gap'] is not None:
+            print(f"Run {i+1}: "
+                  f"separation_violations={sv}, "
+                  f"throughput={res['throughput']}, "
+                  f"mean_gap={res['mean_arrival_gap']:.1f}s, "
+                  f"std_gap={res['std_arrival_gap']:.1f}s, "
+                  f"min_gap={res['min_arrival_gap']:.1f}s, "
+                  f"comp_time={res['comp_time']:.2f}s")
+        else:
+            print(f"Run {i+1}: insufficient arrivals for gap metrics, "
+                  f"separation_violations={sv}, "
+                  f"comp_time={res['comp_time']:.2f}s")
+
         results.append(res)
 
-    # extract metrics
-    collisions = np.array([r['collisions'] for r in results])
-    throughput = np.array([r['throughput'] for r in results])
-    comp_times = np.array([r['computation_time'] for r in results])
-    mean_gaps = np.array([r['mean_arrival_gap'] for r in results if r['mean_arrival_gap'] is not None])
-    std_gaps  = np.array([r['std_arrival_gap'] for r in results if r['std_arrival_gap'] is not None])
-    min_gaps  = np.array([r['min_arrival_gap'] for r in results if r['min_arrival_gap'] is not None])
+    # Extract KPI arrays
+    sep_violations = np.array([r['collisions'] for r in results])
+    throughput     = np.array([r['throughput'] for r in results])
+    mean_gaps      = np.array([r['mean_arrival_gap'] for r in results if r['mean_arrival_gap'] is not None])
+    std_gaps       = np.array([r['std_arrival_gap'] for r in results if r['std_arrival_gap'] is not None])
+    min_gaps       = np.array([r['min_arrival_gap'] for r in results if r['min_arrival_gap'] is not None])
+    comp_times     = np.array([r['comp_time'] for r in results])
 
-    # assemble into dict for convenience
-    metrics = {
-        'Collisions':       collisions,
-        'Throughput':       throughput,
-        'Comp. Time (s)':   comp_times
+    # Print overall summary
+    print("\nSummary over 30 runs:")
+    print(f"  Separation Violations: mean = {sep_violations.mean():.2f}, std = {sep_violations.std(ddof=1):.2f}")
+    print(f"  Throughput:            mean = {throughput.mean():.2f}, std = {throughput.std(ddof=1):.2f}")
+    print(f"  Comp. Time:            mean = {comp_times.mean():.2f}s, std = {comp_times.std(ddof=1):.2f}s")
+
+    if mean_gaps.size > 0:
+        print(f"  Mean Arrival Gap:      mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
+        print(f"  Std Arrival Gap:       mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
+        print(f"  Min Arrival Gap:       mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
+    else:
+        print("  Not enough arrivals to compute gap statistics.")
+
+    # Plot histograms for each KPI
+    kpis = {
+        'Separation Violations': sep_violations,
+        'Throughput':            throughput,
+        'Mean Gap (s)':          mean_gaps,
+        'Std Gap (s)':           std_gaps,
+        'Min Gap (s)':           min_gaps,
+        'Comp Time (s)':         comp_times
     }
-    if len(mean_gaps) > 0:
-        metrics['Mean Arrival Gap (s)'] = mean_gaps
-        metrics['Std Arrival Gap (s)']  = std_gaps
-        metrics['Min Arrival Gap (s)']  = min_gaps
 
-    # build summary table
-    summary = []
-    for name, data in metrics.items():
-        summary.append({
-            'KPI':  name,
-            'Mean': data.mean(),
-            'Std':  data.std(ddof=1)
-        })
-    df_summary = pd.DataFrame(summary).set_index('KPI')
-
-    # print table
-    print("\nKPI Summary:")
-    print(df_summary.to_string(float_format="%.2f"))
-
-    # plot histograms
-    for name, data in metrics.items():
+    for name, data in kpis.items():
         plt.figure()
-        plt.hist(data)
+        plt.hist(data, bins=10)
         plt.title(f"Histogram of {name}")
         plt.xlabel(name)
         plt.ylabel("Frequency")
         plt.show()
 
-
-
-# import random
-# import copy
-# sim_kwargs = dict(
-#     paths_dict=paths_dict,
-#     sim_duration=20000.0,
-#     visualize=False,
-#     width=1024,
-#     height=768,
-#     initial_speed=100.0,
-#     acceleration=0.5,
-#     min_speed=80.0,
-#     max_speed=130.0,
-#     spawn_interval=400.0,
-#     pso_interval=50.0,
-#     time_scale=100.0,
-#     fps=30,
-#     min_sep=3000.0,
-#     sep_weight=100,
-#     fuel_weight=1,
-#     pso_particles=50,
-#     pso_w=0.643852371671638,
-#     pso_c1=1.5066396693442399,
-#     pso_c2=1.7414431113477675,
-#     pso_iters=30,
-#     horizon_steps=3000,
-#     step_skip=20,
-#     local_comm_radius=20000,
-#     local_horizon=40,
-#     local_sep_weight=10000.0
-# )
-
-
-# def random_genome():
-#     return {
-#         'w':            random.uniform(0.1, 1.0),
-#         'c1':           random.uniform(0.5, 2.5),
-#         'c2':           random.uniform(0.5, 2.5),
-#         'n_particles':  random.randint(5, 30),
-#         'max_iter':     random.randint(5, 50),
-#     }
-
-# def mutate(genome, rate=0.2):
-#     # mutate floats
-#     for key in ('w','c1','c2'):
-#         if random.random() < rate:
-#             genome[key] += random.uniform(-0.1, 0.1)
-#             genome[key] = max(0.0, min(3.0, genome[key]))
-#     # mutate ints
-#     for key, lo, hi in (('n_particles',5,30), ('max_iter',5,50)):
-#         if random.random() < rate:
-#             genome[key] += random.choice([-1,1])
-#             genome[key] = max(lo, min(hi, genome[key]))
-
-# def fitness(genome):
-#     # override sim_kwargs with this genome’s PSO settings
-#     params = {
-#         **sim_kwargs,
-#         'visualize': False,
-#         'pso_particles': genome['n_particles'],
-#         'pso_w':         genome['w'],
-#         'pso_c1':        genome['c1'],
-#         'pso_c2':        genome['c2'],
-#         'pso_iters':     genome['max_iter']
-#     }
-#     res = runme(**params)
-#     score = res['throughput'] - 1000 * res['collisions']
-#     print(f"  {genome} → coll={res['collisions']}, thr={res['throughput']}, score={score}")
-#     return score
-
-# def evolve_population(pop_size=10, generations=5, retain=0.5, mutate_rate=0.2):
-#     population = [random_genome() for _ in range(pop_size)]
-#     for gen in range(generations):
-#         scored = sorted([(fitness(g), g) for g in population],
-#                         key=lambda x: x[0], reverse=True)
-#         best_score, best_genome = scored[0]
-#         print(f"Gen {gen}: best={best_genome} (score={best_score})")
-#         survivors = [g for _, g in scored[:int(pop_size * retain)]]
-#         # refill
-#         population = []
-#         while len(population) < pop_size:
-#             parent = copy.deepcopy(random.choice(survivors))
-#             mutate(parent, rate=mutate_rate)
-#             population.append(parent)
-#     return best_genome
-
-# def main():
-#     best = evolve_population(pop_size=8, generations=6, retain=0.5, mutate_rate=0.3)
-#     print(f"\nEvolved hyperparameters: {best}\n")
-#     # final visual run
-#     final_params = {
-#         **sim_kwargs,
-#         'visualize': True,
-#         'pso_particles': best['n_particles'],
-#         'pso_w':         best['w'],
-#         'pso_c1':        best['c1'],
-#         'pso_c2':        best['c2'],
-#         'pso_iters':     best['max_iter']
-#     }
-#     results = runme(**final_params)
-#     print("Final KPIs:", results)
-
-# if __name__ == "__main__":
-#     main()
