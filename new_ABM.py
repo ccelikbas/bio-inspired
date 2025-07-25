@@ -633,106 +633,242 @@ def runme(paths_dict,
         'min_arrival_gap': min_arrival_gap
     }
 
+
 if __name__ == '__main__':
     import time
     import numpy as np
     import matplotlib.pyplot as plt
+    from tqdm import tqdm
+    import os
 
-    # Simulation parameters
-    sim_kwargs = dict(
-        paths_dict=paths_dict,
-        sim_duration=20000.0,
-        visualize=True,
-        add_con_plot=True,
-        width=1024,
-        height=768,
-        initial_speed=100.0,
-        acceleration=1,
-        min_speed=80.0,
-        max_speed=130.0,
-        spawn_interval=300.0,
-        pso_interval=50.0,
-        time_scale=100.0,
-        fps=30,
-        min_sep=3000.0,
-        sep_weight=1,
-        fuel_weight=0,
-        pso_particles=100,
-        pso_w=0.643852371671638,
-        pso_c1=1.5066396693442399,
-        pso_c2=1.7414431113477675,
-        pso_iters=20,
-        horizon_steps=3000,
-        step_skip=20,
-        local_comm_radius=20000,
-        local_horizon=40,
-        local_sep_weight=10000.0,
-        LOCAL_SEP_RADIUS=6000
-    )
+    SAVE_DIR = os.path.expanduser("~/Documents/SimulationResults")
+    os.makedirs(SAVE_DIR, exist_ok=True)
 
-    # Run the simulation multiple times, measuring compute time
-    results = []
-    for i in range(30):
-        t0 = time.perf_counter()
-        res = runme(**sim_kwargs)
-        res['comp_time'] = time.perf_counter() - t0
+    # === Operational scenario sensitivity ===
+    spawn_vals = np.arange(200, 601, 200)
+    sep_vals   = np.arange(2000, 4001, 1000)
+    n_runs     = 10
 
-        # Per‐run printout
-        if res['mean_arrival_gap'] is not None:
-            print(f"Run {i+1}: "
-                  f"collisions={res['collisions']}, "
-                  f"throughput={res['throughput']}, "
-                  f"mean_gap={res['mean_arrival_gap']:.1f}s, "
-                  f"std_gap={res['std_arrival_gap']:.1f}s, "
-                  f"min_gap={res['min_arrival_gap']:.1f}s, "
-                  f"comp_time={res['comp_time']:.2f}s")
-        else:
-            print(f"Run {i+1}: insufficient arrivals for gap metrics, "
-                  f"comp_time={res['comp_time']:.2f}s")
+    violations_grid = np.zeros((len(sep_vals), len(spawn_vals)))
+    time_grid       = np.zeros_like(violations_grid)
 
-        results.append(res)
+    print("Operational‐scenario sensitivity:")
+    for i, min_sep in enumerate(tqdm(sep_vals, desc="MinSep")):
+        for j, spawn in enumerate(spawn_vals):
+            coll_list, ct_list = [], []
+            for run in range(n_runs):
+                sim_kwargs = dict(
+                    paths_dict=paths_dict,
+                    sim_duration=20000.0,
+                    visualize=False,
+                    add_con_plot=False,
+                    width=1024, height=768,
+                    initial_speed=100.0, acceleration=1,
+                    min_speed=80.0, max_speed=130.0,
+                    spawn_interval=spawn, fps=30,
+                    min_sep=min_sep,
+                    pso_interval=50.0, sep_weight=1,
+                    fuel_weight=0,
+                    pso_particles=100, pso_w=0.64,
+                    pso_c1=1.5, pso_c2=1.74,
+                    pso_iters=20,
+                    horizon_steps=3000, step_skip=20,
+                    local_comm_radius=20000,
+                    local_horizon=40,
+                    local_sep_weight=10000.0,
+                    LOCAL_SEP_RADIUS=6000
+                )
+                print(f"[Op] spawn={spawn}s, min_sep={min_sep}m, run={run+1}/{n_runs}")
+                t0 = time.perf_counter()
+                res = runme(**sim_kwargs)
+                coll_list.append(res['collisions'])
+                ct_list.append(time.perf_counter() - t0)
 
-    # Extract KPI arrays
-    collisions = np.array([r['collisions']        for r in results])
-    throughput = np.array([r['throughput']        for r in results])
-    mean_gaps  = np.array([r['mean_arrival_gap']  for r in results
-                           if r['mean_arrival_gap'] is not None])
-    std_gaps   = np.array([r['std_arrival_gap']   for r in results
-                           if r['std_arrival_gap'] is not None])
-    min_gaps   = np.array([r['min_arrival_gap']   for r in results
-                           if r['min_arrival_gap'] is not None])
-    comp_times = np.array([r['comp_time']         for r in results])
+            violations_grid[i, j] = np.mean(coll_list)
+            time_grid[i, j]       = np.mean(ct_list)
 
-    # Print overall summary
-    print("\nSummary over 30 runs:")
-    print(f"  Collisions:    mean = {collisions.mean():.2f}, std = {collisions.std(ddof=1):.2f}")
-    print(f"  Throughput:    mean = {throughput.mean():.2f}, std = {throughput.std(ddof=1):.2f}")
-    print(f"  Comp. Time:    mean = {comp_times.mean():.2f}s, std = {comp_times.std(ddof=1):.2f}s")
+            # Save intermediate result
+            np.save(os.path.join(SAVE_DIR, "violations_grid.npy"), violations_grid)
+            np.save(os.path.join(SAVE_DIR, "time_grid.npy"), time_grid)
 
-    if len(mean_gaps) > 0:
-        print(f"  Mean Arrival Gap: mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
-        print(f"  Std Arrival Gap:  mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
-        print(f"  Min Arrival Gap:  mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
-    else:
-        print("  Not enough arrivals to compute gap statistics.")
+    # === PSO hyperparameter sensitivity ===
+    particles  = [75, 100, 125]
+    iterations = list(range(10, 20, 30))
+    pso_violations = np.zeros((len(iterations), len(particles)))
+    pso_times      = np.zeros_like(pso_violations)
 
-    # Plot histograms for each KPI
-    kpis = {
-        'Collisions': collisions,
-        'Throughput': throughput,
-        'Mean Gap (s)': mean_gaps,
-        'Std Gap (s)': std_gaps,
-        'Min Gap (s)': min_gaps,
-        'Comp Time (s)': comp_times
-    }
+    print("PSO‐hyperparameter sensitivity:")
+    for i, iters in enumerate(tqdm(iterations, desc="Iters")):
+        for j, npart in enumerate(particles):
+            coll_list, ct_list = [], []
+            for run in range(n_runs):
+                sim_kwargs = dict(
+                    paths_dict=paths_dict,
+                    sim_duration=20000.0,
+                    visualize=False,
+                    add_con_plot=False,
+                    width=1024, height=768,
+                    initial_speed=100.0, acceleration=1,
+                    min_speed=80.0, max_speed=130.0,
+                    spawn_interval=300.0, fps=30,
+                    min_sep=3000.0,
+                    pso_interval=50.0, sep_weight=1,
+                    fuel_weight=0,
+                    pso_particles=npart,
+                    pso_w=0.64, pso_c1=1.5, pso_c2=1.74,
+                    pso_iters=iters,
+                    horizon_steps=3000, step_skip=20,
+                    local_comm_radius=20000,
+                    local_horizon=40,
+                    local_sep_weight=10000.0,
+                    LOCAL_SEP_RADIUS=6000
+                )
+                print(f"[PSO] particles={npart}, iters={iters}, run={run+1}/{n_runs}")
+                t0 = time.perf_counter()
+                res = runme(**sim_kwargs)
+                coll_list.append(res['collisions'])
+                ct_list.append(time.perf_counter() - t0)
 
-    for name, data in kpis.items():
-        plt.figure()
-        plt.hist(data, bins=10)
-        plt.title(f"Histogram of {name}")
-        plt.xlabel(name)
-        plt.ylabel("Frequency")
-        plt.show()
+            pso_violations[i, j] = np.mean(coll_list)
+            pso_times[i, j]      = np.mean(ct_list)
+
+            # Save intermediate result
+            np.save(os.path.join(SAVE_DIR, "pso_violations.npy"), pso_violations)
+            np.save(os.path.join(SAVE_DIR, "pso_times.npy"), pso_times)
+
+    # === Plot contours ===
+    X1, Y1 = np.meshgrid(spawn_vals, sep_vals)
+    X2, Y2 = np.meshgrid(particles, iterations)
+
+    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+
+    cs = axs[0, 0].contourf(X1, Y1, violations_grid, cmap='viridis')
+    axs[0, 0].set(title='SepViol vs spawn & min_sep', xlabel='Spawn(s)', ylabel='MinSep(m)')
+    fig.colorbar(cs, ax=axs[0, 0])
+
+    cs = axs[0, 1].contourf(X1, Y1, time_grid, cmap='viridis')
+    axs[0, 1].set(title='CompTime vs spawn & min_sep', xlabel='Spawn(s)', ylabel='MinSep(m)')
+    fig.colorbar(cs, ax=axs[0, 1])
+
+    cs = axs[1, 0].contourf(X2, Y2, pso_violations, cmap='viridis')
+    axs[1, 0].set(title='SepViol vs particles & iters', xlabel='Particles', ylabel='Iters')
+    fig.colorbar(cs, ax=axs[1, 0])
+
+    cs = axs[1, 1].contourf(X2, Y2, pso_times, cmap='viridis')
+    axs[1, 1].set(title='CompTime vs particles & iters', xlabel='Particles', ylabel='Iters')
+    fig.colorbar(cs, ax=axs[1, 1])
+
+    plt.tight_layout()
+    
+    # Save figure to file
+    fig_path = os.path.join(SAVE_DIR, "summary_plots.png")
+    plt.savefig(fig_path, dpi=300)
+
+    plt.show()
+
+
+
+
+# if __name__ == '__main__':
+#     import time
+#     import numpy as np
+#     import matplotlib.pyplot as plt
+
+#     # Simulation parameters
+#     sim_kwargs = dict(
+#         paths_dict=paths_dict,
+#         sim_duration=20000.0,
+#         visualize=True,
+#         add_con_plot=True,
+#         width=1024,
+#         height=768,
+#         initial_speed=100.0,
+#         acceleration=1,
+#         min_speed=80.0,
+#         max_speed=130.0,
+#         spawn_interval=300.0,
+#         pso_interval=50.0,
+#         time_scale=100.0,
+#         fps=30,
+#         min_sep=3000.0,
+#         sep_weight=1,
+#         fuel_weight=0,
+#         pso_particles=100,
+#         pso_w=0.643852371671638,
+#         pso_c1=1.5066396693442399,
+#         pso_c2=1.7414431113477675,
+#         pso_iters=20,
+#         horizon_steps=3000,
+#         step_skip=20,
+#         local_comm_radius=20000,
+#         local_horizon=40,
+#         local_sep_weight=10000.0,
+#         LOCAL_SEP_RADIUS=6000
+#     )
+
+#     # Run the simulation multiple times, measuring compute time
+#     results = []
+#     for i in range(30):
+#         t0 = time.perf_counter()
+#         res = runme(**sim_kwargs)
+#         res['comp_time'] = time.perf_counter() - t0
+
+#         # Per‐run printout
+#         if res['mean_arrival_gap'] is not None:
+#             print(f"Run {i+1}: "
+#                   f"collisions={res['collisions']}, "
+#                   f"throughput={res['throughput']}, "
+#                   f"mean_gap={res['mean_arrival_gap']:.1f}s, "
+#                   f"std_gap={res['std_arrival_gap']:.1f}s, "
+#                   f"min_gap={res['min_arrival_gap']:.1f}s, "
+#                   f"comp_time={res['comp_time']:.2f}s")
+#         else:
+#             print(f"Run {i+1}: insufficient arrivals for gap metrics, "
+#                   f"comp_time={res['comp_time']:.2f}s")
+
+#         results.append(res)
+
+#     # Extract KPI arrays
+#     collisions = np.array([r['collisions']        for r in results])
+#     throughput = np.array([r['throughput']        for r in results])
+#     mean_gaps  = np.array([r['mean_arrival_gap']  for r in results
+#                            if r['mean_arrival_gap'] is not None])
+#     std_gaps   = np.array([r['std_arrival_gap']   for r in results
+#                            if r['std_arrival_gap'] is not None])
+#     min_gaps   = np.array([r['min_arrival_gap']   for r in results
+#                            if r['min_arrival_gap'] is not None])
+#     comp_times = np.array([r['comp_time']         for r in results])
+
+#     # Print overall summary
+#     print("\nSummary over 30 runs:")
+#     print(f"  Collisions:    mean = {collisions.mean():.2f}, std = {collisions.std(ddof=1):.2f}")
+#     print(f"  Throughput:    mean = {throughput.mean():.2f}, std = {throughput.std(ddof=1):.2f}")
+#     print(f"  Comp. Time:    mean = {comp_times.mean():.2f}s, std = {comp_times.std(ddof=1):.2f}s")
+
+#     if len(mean_gaps) > 0:
+#         print(f"  Mean Arrival Gap: mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
+#         print(f"  Std Arrival Gap:  mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
+#         print(f"  Min Arrival Gap:  mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
+#     else:
+#         print("  Not enough arrivals to compute gap statistics.")
+
+#     # Plot histograms for each KPI
+#     kpis = {
+#         'Collisions': collisions,
+#         'Throughput': throughput,
+#         'Mean Gap (s)': mean_gaps,
+#         'Std Gap (s)': std_gaps,
+#         'Min Gap (s)': min_gaps,
+#         'Comp Time (s)': comp_times
+#     }
+
+#     for name, data in kpis.items():
+#         plt.figure()
+#         plt.hist(data, bins=10)
+#         plt.title(f"Histogram of {name}")
+#         plt.xlabel(name)
+#         plt.ylabel("Frequency")
+#         plt.show()
 
 
 # import random
