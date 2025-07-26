@@ -282,7 +282,7 @@ class GlobalPSO:
                     positions.append(A + (B - A) * frac)
 
             # smoother optimisation attempt
-            max_allowed_penalty = 1e6
+            max_allowed_penalty = 1e10
             for i in range(self.m):
                 for j in range(i + 1, self.m):
                     d_ij = positions[i].distance_to(positions[j])
@@ -292,8 +292,8 @@ class GlobalPSO:
                     else:
                         spread_pen += (1 / d_ij)**2
 
-                    if spread_pen > max_allowed_penalty:
-                        return spread_pen  # soft early abort
+                    # if spread_pen > max_allowed_penalty:
+                    #     return spread_pen  # soft early abort
 
 
             # # Pairwise separation check
@@ -402,6 +402,10 @@ class ATCAgent:
         self.local_horizon      = local_horizon
         self.local_sep_weight   = local_sep_weight
 
+        self.global_histories = []
+        self.local_histories  = []
+
+
         if add_con_plot:
             plt.ion()
 
@@ -438,6 +442,8 @@ class ATCAgent:
         )
         global_speeds = global_pso.optimize()
 
+        self.global_histories.append(global_pso.history)
+
         if add_con_plot:
             # update the global plot
             self._g_ax.clear()
@@ -469,6 +475,8 @@ class ATCAgent:
                 enforce_overtake=False    # ← turn on no‑overtake here
             )
             local_speeds = local_pso.optimize()
+
+            self.local_histories.append(local_pso.history)
             
             if add_con_plot:
                 # update the local plot
@@ -630,8 +638,110 @@ def runme(paths_dict,
         'throughput': throughput,
         'mean_arrival_gap': mean_arrival_gap,
         'std_arrival_gap': std_arrival_gap,
-        'min_arrival_gap': min_arrival_gap
+        'min_arrival_gap': min_arrival_gap,
+
+        # for plotting convergence 
+        'global_histories': atc.global_histories,
+        'local_histories':  atc.local_histories,
     }
+
+
+
+# import numpy as np
+# import matplotlib.pyplot as plt
+# from paths import paths_dict
+
+# def main():
+#     # Single full simulation
+#     out = runme(
+#         paths_dict=paths_dict,
+#         visualize=False,
+#         add_con_plot=False,
+#         sim_duration=2000.0,
+#         spawn_interval=300.0,
+#         min_sep=3000.0,
+#         sep_weight=1,
+#         fuel_weight=0,
+#         pso_particles=20,
+#         pso_iters=10,
+#         horizon_steps=3000,
+#         step_skip=20
+#     )
+
+#     global_hist = out['global_histories']  # list of lists
+#     local_hist  = out['local_histories']   # list of lists
+
+#     # # Plot every global PSO history
+#     # plt.figure(figsize=(8,5))
+#     # for h in global_hist:
+#     #     plt.plot(range(1, len(h)+1), h, color='grey', alpha=0.7, linewidth=1)
+#     # # plot avarge of globval history 
+#     # plt.plot(range(1, len(h)+1), global_hist.mean(axis=0), color='black', linewidth=2, label='Mean')
+#     # plt.title("Global PSO Convergence")
+#     # plt.xlabel("Iteration")
+#     # plt.ylabel("Best Cost")
+#     # plt.grid(True)
+#     # plt.tight_layout()
+#     # plt.savefig("global_all_histories.png", dpi=300)
+#     # plt.show()
+#     # ── Global PSO histories ──
+#     min_len_g = min(len(h) for h in global_hist)
+#     G = np.array([h[:min_len_g] for h in global_hist])
+#     xg = np.arange(1, min_len_g + 1)
+
+#     plt.figure(figsize=(8,5))
+#     for h in G:
+#         plt.plot(xg, h, color='blue', alpha=0.4, linewidth=1)
+#     # plot average
+#     plt.plot(xg, G.mean(axis=0), color='black', linewidth=2, label='Mean')
+#     # plt.ylim(1000000, 1006000)
+#     plt.title("Global PSO Convergence")
+#     plt.xlabel("Iteration")
+#     plt.ylabel("Best Cost")
+#     plt.grid(True)
+#     plt.legend()
+#     plt.tight_layout()
+#     plt.savefig("global_all_histories.png", dpi=300)
+#     plt.show()
+
+#     # # Plot every local PSO history
+#     # plt.figure(figsize=(8,5))
+#     # for h in local_hist:
+#     #     plt.plot(range(1, len(h)+1), h, color='grey', alpha=0.7, linewidth=1)
+#     # # plot avarge of local history 
+#     # plt.plot(range(1, len(h)+1), local_hist.mean(axis=0), color='black', linewidth=2, label='Mean')
+#     # plt.title("Local PSO Convergence")
+#     # plt.xlabel("Iteration")
+#     # plt.ylabel("Best Cost")
+#     # plt.grid(True)
+#     # plt.tight_layout()
+#     # plt.savefig("local_all_histories.png", dpi=300)
+#     # plt.show()
+
+#     if local_hist:
+#         min_len_l = min(len(h) for h in local_hist)
+#         L = np.array([h[:min_len_l] for h in local_hist])
+#         xl = np.arange(1, min_len_l + 1)
+
+#         plt.figure(figsize=(8,5))
+#         for h in L:
+#             plt.plot(xl, h, color='blue', alpha=0.4, linewidth=1)
+#         # plot average
+#         plt.plot(xl, L.mean(axis=0), color='black', linewidth=2, label='Mean')
+#         plt.title("Local PSO Convergence")
+#         plt.xlabel("Iteration")
+#         plt.ylabel("Best Cost")
+#         plt.grid(True)
+#         plt.legend()
+#         plt.tight_layout()
+#         plt.savefig("local_all_histories.png", dpi=300)
+#         plt.show()
+
+    
+
+# if __name__ == '__main__':
+#     main()
+
 
 
 if __name__ == '__main__':
@@ -641,131 +751,84 @@ if __name__ == '__main__':
     from tqdm import tqdm
     import os
 
+    from paths import paths_dict
+
+    # where to save intermediate & final results
     SAVE_DIR = os.path.expanduser("~/Documents/SimulationResults")
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    # === Operational scenario sensitivity ===
-    spawn_vals = np.arange(200, 601, 200)
-    sep_vals   = np.arange(2000, 4001, 1000)
-    n_runs     = 10
+    # === PSO hyperparameter grid ===
+    particles  = [25, 50, 100]
+    iterations = [5, 10, 20]
+    n_runs     = 5
 
-    violations_grid = np.zeros((len(sep_vals), len(spawn_vals)))
-    time_grid       = np.zeros_like(violations_grid)
-
-    print("Operational‐scenario sensitivity:")
-    for i, min_sep in enumerate(tqdm(sep_vals, desc="MinSep")):
-        for j, spawn in enumerate(spawn_vals):
-            coll_list, ct_list = [], []
-            for run in range(n_runs):
-                sim_kwargs = dict(
-                    paths_dict=paths_dict,
-                    sim_duration=20000.0,
-                    visualize=False,
-                    add_con_plot=False,
-                    width=1024, height=768,
-                    initial_speed=100.0, acceleration=1,
-                    min_speed=80.0, max_speed=130.0,
-                    spawn_interval=spawn, fps=30,
-                    min_sep=min_sep,
-                    pso_interval=50.0, sep_weight=1,
-                    fuel_weight=0,
-                    pso_particles=100, pso_w=0.64,
-                    pso_c1=1.5, pso_c2=1.74,
-                    pso_iters=20,
-                    horizon_steps=3000, step_skip=20,
-                    local_comm_radius=20000,
-                    local_horizon=40,
-                    local_sep_weight=10000.0,
-                    LOCAL_SEP_RADIUS=6000
-                )
-                print(f"[Op] spawn={spawn}s, min_sep={min_sep}m, run={run+1}/{n_runs}")
-                t0 = time.perf_counter()
-                res = runme(**sim_kwargs)
-                coll_list.append(res['collisions'])
-                ct_list.append(time.perf_counter() - t0)
-
-            violations_grid[i, j] = np.mean(coll_list)
-            time_grid[i, j]       = np.mean(ct_list)
-
-            # Save intermediate result
-            np.save(os.path.join(SAVE_DIR, "violations_grid.npy"), violations_grid)
-            np.save(os.path.join(SAVE_DIR, "time_grid.npy"), time_grid)
-
-    # === PSO hyperparameter sensitivity ===
-    particles  = [75, 100, 125]
-    iterations = list(range(10, 20, 30))
     pso_violations = np.zeros((len(iterations), len(particles)))
     pso_times      = np.zeros_like(pso_violations)
 
-    print("PSO‐hyperparameter sensitivity:")
     for i, iters in enumerate(tqdm(iterations, desc="Iters")):
         for j, npart in enumerate(particles):
             coll_list, ct_list = [], []
+            print(f'Running: {iters} itterations and {npart} particles')
             for run in range(n_runs):
                 sim_kwargs = dict(
                     paths_dict=paths_dict,
                     sim_duration=20000.0,
                     visualize=False,
-                    add_con_plot=False,
-                    width=1024, height=768,
-                    initial_speed=100.0, acceleration=1,
-                    min_speed=80.0, max_speed=130.0,
-                    spawn_interval=300.0, fps=30,
+                    add_con_plot=False,      # no per-call plotting
+                    initial_speed=100.0,
+                    acceleration=1.0,
+                    min_speed=80.0,
+                    max_speed=130.0,
+                    spawn_interval=300.0,
+                    fps=30,
                     min_sep=3000.0,
-                    pso_interval=50.0, sep_weight=1,
+                    sep_weight=1,
                     fuel_weight=0,
                     pso_particles=npart,
-                    pso_w=0.64, pso_c1=1.5, pso_c2=1.74,
+                    pso_w=0.64,
+                    pso_c1=1.5,
+                    pso_c2=1.74,
                     pso_iters=iters,
-                    horizon_steps=3000, step_skip=20,
+                    horizon_steps=3000,
+                    step_skip=20,
                     local_comm_radius=20000,
                     local_horizon=40,
                     local_sep_weight=10000.0,
                     LOCAL_SEP_RADIUS=6000
                 )
-                print(f"[PSO] particles={npart}, iters={iters}, run={run+1}/{n_runs}")
                 t0 = time.perf_counter()
-                res = runme(**sim_kwargs)
-                coll_list.append(res['collisions'])
+                out = runme(**sim_kwargs)
+                coll_list.append(out['collisions'])
                 ct_list.append(time.perf_counter() - t0)
 
             pso_violations[i, j] = np.mean(coll_list)
             pso_times[i, j]      = np.mean(ct_list)
 
-            # Save intermediate result
+            # save as you go
             np.save(os.path.join(SAVE_DIR, "pso_violations.npy"), pso_violations)
             np.save(os.path.join(SAVE_DIR, "pso_times.npy"), pso_times)
 
-    # === Plot contours ===
-    X1, Y1 = np.meshgrid(spawn_vals, sep_vals)
-    X2, Y2 = np.meshgrid(particles, iterations)
+    # === Plotting ===
+    P, I = np.meshgrid(particles, iterations)
 
-    fig, axs = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axs = plt.subplots(1, 2, figsize=(14, 5))
 
-    cs = axs[0, 0].contourf(X1, Y1, violations_grid, cmap='viridis')
-    axs[0, 0].set(title='SepViol vs spawn & min_sep', xlabel='Spawn(s)', ylabel='MinSep(m)')
-    fig.colorbar(cs, ax=axs[0, 0])
+    cs0 = axs[0].contourf(P, I, pso_violations, cmap='viridis')
+    axs[0].set_title("Mean Collisions vs PSO Params")
+    axs[0].set_xlabel("Particles")
+    axs[0].set_ylabel("Iterations")
+    fig.colorbar(cs0, ax=axs[0], label="Avg Collisions")
 
-    cs = axs[0, 1].contourf(X1, Y1, time_grid, cmap='viridis')
-    axs[0, 1].set(title='CompTime vs spawn & min_sep', xlabel='Spawn(s)', ylabel='MinSep(m)')
-    fig.colorbar(cs, ax=axs[0, 1])
-
-    cs = axs[1, 0].contourf(X2, Y2, pso_violations, cmap='viridis')
-    axs[1, 0].set(title='SepViol vs particles & iters', xlabel='Particles', ylabel='Iters')
-    fig.colorbar(cs, ax=axs[1, 0])
-
-    cs = axs[1, 1].contourf(X2, Y2, pso_times, cmap='viridis')
-    axs[1, 1].set(title='CompTime vs particles & iters', xlabel='Particles', ylabel='Iters')
-    fig.colorbar(cs, ax=axs[1, 1])
+    cs1 = axs[1].contourf(P, I, pso_times, cmap='viridis')
+    axs[1].set_title("Mean Compute Time vs PSO Params")
+    axs[1].set_xlabel("Particles")
+    axs[1].set_ylabel("Iterations")
+    fig.colorbar(cs1, ax=axs[1], label="Avg Time (s)")
 
     plt.tight_layout()
-    
-    # Save figure to file
-    fig_path = os.path.join(SAVE_DIR, "summary_plots.png")
+    fig_path = os.path.join(SAVE_DIR, "pso_sensitivity_contours.png")
     plt.savefig(fig_path, dpi=300)
-
     plt.show()
-
 
 
 
