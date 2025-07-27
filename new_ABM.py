@@ -282,7 +282,7 @@ class GlobalPSO:
                     positions.append(A + (B - A) * frac)
 
             # smoother optimisation attempt
-            max_allowed_penalty = 1e10
+            max_allowed_penalty = 1e6
             for i in range(self.m):
                 for j in range(i + 1, self.m):
                     d_ij = positions[i].distance_to(positions[j])
@@ -292,8 +292,8 @@ class GlobalPSO:
                     else:
                         spread_pen += (1 / d_ij)**2
 
-                    # if spread_pen > max_allowed_penalty:
-                    #     return spread_pen  # soft early abort
+                    if spread_pen > max_allowed_penalty:
+                        return spread_pen  # soft early abort
 
 
             # # Pairwise separation check
@@ -402,10 +402,6 @@ class ATCAgent:
         self.local_horizon      = local_horizon
         self.local_sep_weight   = local_sep_weight
 
-        self.global_histories = []
-        self.local_histories  = []
-
-
         if add_con_plot:
             plt.ion()
 
@@ -442,8 +438,6 @@ class ATCAgent:
         )
         global_speeds = global_pso.optimize()
 
-        self.global_histories.append(global_pso.history)
-
         if add_con_plot:
             # update the global plot
             self._g_ax.clear()
@@ -475,8 +469,6 @@ class ATCAgent:
                 enforce_overtake=False    # ← turn on no‑overtake here
             )
             local_speeds = local_pso.optimize()
-
-            self.local_histories.append(local_pso.history)
             
             if add_con_plot:
                 # update the local plot
@@ -638,14 +630,105 @@ def runme(paths_dict,
         'throughput': throughput,
         'mean_arrival_gap': mean_arrival_gap,
         'std_arrival_gap': std_arrival_gap,
-        'min_arrival_gap': min_arrival_gap,
-
-        # for plotting convergence 
-        'global_histories': atc.global_histories,
-        'local_histories':  atc.local_histories,
+        'min_arrival_gap': min_arrival_gap
     }
 
 
+# if __name__ == '__main__':
+#     import time
+#     import numpy as np
+#     import matplotlib.pyplot as plt
+
+#     # Simulation parameters
+#     sim_kwargs = dict(
+#                     paths_dict=paths_dict,
+#                     sim_duration=20000.0,
+#                     visualize=False,
+#                     add_con_plot=False,      # no per-call plotting
+#                     initial_speed=100.0,
+#                     acceleration=1.0,
+#                     min_speed=80.0,
+#                     max_speed=130.0,
+#                     spawn_interval=300.0,
+#                     fps=30,
+#                     min_sep=3000.0,
+#                     sep_weight=1,
+#                     fuel_weight=0,
+#                     pso_particles=15,
+#                     pso_w=0.64,
+#                     pso_c1=1.5,
+#                     pso_c2=1.74,
+#                     pso_iters=12,
+#                     horizon_steps=3000,
+#                     step_skip=20,
+#                     local_comm_radius=20000,
+#                     local_horizon=40,
+#                     local_sep_weight=10000.0,
+#                     LOCAL_SEP_RADIUS=6000
+#                 )
+
+#     # Run the simulation multiple times, measuring compute time
+#     results = []
+#     for i in range(30):
+#         t0 = time.perf_counter()
+#         res = runme(**sim_kwargs)
+#         res['comp_time'] = time.perf_counter() - t0
+
+#         # Per‐run printout
+#         sv = res['collisions']
+#         if res['mean_arrival_gap'] is not None:
+#             print(f"Run {i+1}: "
+#                   f"separation_violations={sv}, "
+#                   f"throughput={res['throughput']}, "
+#                   f"mean_gap={res['mean_arrival_gap']:.1f}s, "
+#                   f"std_gap={res['std_arrival_gap']:.1f}s, "
+#                   f"min_gap={res['min_arrival_gap']:.1f}s, "
+#                   f"comp_time={res['comp_time']:.2f}s")
+#         else:
+#             print(f"Run {i+1}: insufficient arrivals for gap metrics, "
+#                   f"separation_violations={sv}, "
+#                   f"comp_time={res['comp_time']:.2f}s")
+
+#         results.append(res)
+
+#     # Extract KPI arrays
+#     sep_violations = np.array([r['collisions'] for r in results])
+#     throughput     = np.array([r['throughput'] for r in results])
+#     mean_gaps      = np.array([r['mean_arrival_gap'] for r in results if r['mean_arrival_gap'] is not None])
+#     std_gaps       = np.array([r['std_arrival_gap'] for r in results if r['std_arrival_gap'] is not None])
+#     min_gaps       = np.array([r['min_arrival_gap'] for r in results if r['min_arrival_gap'] is not None])
+#     comp_times     = np.array([r['comp_time'] for r in results])
+
+#     # Print overall summary
+#     print("\nSummary over 30 runs:")
+#     print(f"  Separation Violations: mean = {sep_violations.mean():.2f}, std = {sep_violations.std(ddof=1):.2f}")
+#     print(f"  Throughput:            mean = {throughput.mean():.2f}, std = {throughput.std(ddof=1):.2f}")
+#     print(f"  Comp. Time:            mean = {comp_times.mean():.2f}s, std = {comp_times.std(ddof=1):.2f}s")
+
+#     if mean_gaps.size > 0:
+#         print(f"  Mean Arrival Gap:      mean = {mean_gaps.mean():.1f}s, std = {mean_gaps.std(ddof=1):.1f}s")
+#         print(f"  Std Arrival Gap:       mean = {std_gaps.mean():.1f}s, std = {std_gaps.std(ddof=1):.1f}s")
+#         print(f"  Min Arrival Gap:       mean = {min_gaps.mean():.1f}s, std = {min_gaps.std(ddof=1):.1f}s")
+#     else:
+#         print("  Not enough arrivals to compute gap statistics.")
+
+#     # Plot histograms for each KPI
+#     kpis = {
+#         'Separation Violations': sep_violations,
+#         'Throughput':            throughput,
+#         'Mean Gap (s)':          mean_gaps,
+#         'Std Gap (s)':           std_gaps,
+#         'Min Gap (s)':           min_gaps,
+#         'Comp Time (s)':         comp_times
+#     }
+
+#     for name, data in kpis.items():
+#         plt.figure()
+#         plt.hist(data, bins=10)
+#         plt.title(f"Histogram of {name}")
+#         plt.xlabel(name)
+#         plt.ylabel("Frequency")
+#         plt.show()
 
 # import numpy as np
 # import matplotlib.pyplot as plt
@@ -743,92 +826,216 @@ def runme(paths_dict,
 #     main()
 
 
+# '''SA hyperparamters 2.0'''
+# if __name__ == '__main__':
+#     import time
+#     import numpy as np
+#     import matplotlib.pyplot as plt
+#     from tqdm import tqdm
+#     import os
 
-if __name__ == '__main__':
-    import time
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from tqdm import tqdm
-    import os
+#     from paths import paths_dict
 
-    from paths import paths_dict
+#     SAVE_DIR = os.path.expanduser("~/Documents/SimulationResults")
+#     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    # where to save intermediate & final results
-    SAVE_DIR = os.path.expanduser("~/Documents/SimulationResults")
-    os.makedirs(SAVE_DIR, exist_ok=True)
+#     # PSO parameter grid for sensitivity
+#     w_values   = [0.4, 0.6, 0.8]
+#     c1_values  = [1.0, 1.5, 2.0]
+#     c2_values  = [1.0, 1.74, 2.5]
+#     n_runs     = 5
 
-    # === PSO hyperparameter grid ===
-    particles  = [25, 50, 100]
-    iterations = [5, 10, 20]
-    n_runs     = 5
+#     # fix one parameter at default while varying the other two
+#     default = {'w': 0.64, 'c1': 1.5, 'c2': 1.74}
 
-    pso_violations = np.zeros((len(iterations), len(particles)))
-    pso_times      = np.zeros_like(pso_violations)
+#     def run_grid(x_vals, y_vals, fixed_param, fixed_val, xlabel, ylabel, out_prefix):
+#         Z_coll = np.zeros((len(y_vals), len(x_vals)))
+#         Z_time = np.zeros_like(Z_coll)
+#         for i, y in enumerate(tqdm(y_vals, desc=f"{ylabel}")):
+#             for j, x in enumerate(x_vals):
+#                 coll_list, time_list = [], []
+#                 for run in range(n_runs):
+#                     print(f'running: {y}, {x}, {run}')
+#                     params = {
+#                         'pso_w': default['w'],
+#                         'pso_c1': default['c1'],
+#                         'pso_c2': default['c2'],
+#                         fixed_param: x if xlabel == fixed_param else y
+#                     }
+#                     params[xlabel] = x
+#                     params[ylabel] = y
+#                     sim_kwargs = dict(
+#                         paths_dict=paths_dict,
+#                         sim_duration=20000.0,
+#                         visualize=False,
+#                         add_con_plot=False,
+#                         initial_speed=100.0,
+#                         acceleration=1.0,
+#                         min_speed=80.0,
+#                         max_speed=130.0,
+#                         spawn_interval=300.0,
+#                         fps=30,
+#                         min_sep=3000.0,
+#                         sep_weight=1,
+#                         fuel_weight=0,
+#                         pso_particles=50,
+#                         pso_iters=10,
+#                         horizon_steps=3000,
+#                         step_skip=20,
+#                         local_comm_radius=20000,
+#                         local_horizon=40,
+#                         local_sep_weight=10000.0,
+#                         LOCAL_SEP_RADIUS=6000,
+#                         **params
+#                     )
+#                     t0 = time.perf_counter()
+#                     out = runme(**sim_kwargs)
+#                     coll_list.append(out['collisions'])
+#                     time_list.append(time.perf_counter() - t0)
+#                 Z_coll[i, j] = np.mean(coll_list)
+#                 Z_time[i, j] = np.mean(time_list)
+#             np.save(os.path.join(SAVE_DIR, f"{out_prefix}_coll.npy"), Z_coll)
+#             np.save(os.path.join(SAVE_DIR, f"{out_prefix}_time.npy"), Z_time)
 
-    for i, iters in enumerate(tqdm(iterations, desc="Iters")):
-        for j, npart in enumerate(particles):
-            coll_list, ct_list = [], []
-            print(f'Running: {iters} itterations and {npart} particles')
-            for run in range(n_runs):
-                sim_kwargs = dict(
-                    paths_dict=paths_dict,
-                    sim_duration=20000.0,
-                    visualize=False,
-                    add_con_plot=False,      # no per-call plotting
-                    initial_speed=100.0,
-                    acceleration=1.0,
-                    min_speed=80.0,
-                    max_speed=130.0,
-                    spawn_interval=300.0,
-                    fps=30,
-                    min_sep=3000.0,
-                    sep_weight=1,
-                    fuel_weight=0,
-                    pso_particles=npart,
-                    pso_w=0.64,
-                    pso_c1=1.5,
-                    pso_c2=1.74,
-                    pso_iters=iters,
-                    horizon_steps=3000,
-                    step_skip=20,
-                    local_comm_radius=20000,
-                    local_horizon=40,
-                    local_sep_weight=10000.0,
-                    LOCAL_SEP_RADIUS=6000
-                )
-                t0 = time.perf_counter()
-                out = runme(**sim_kwargs)
-                coll_list.append(out['collisions'])
-                ct_list.append(time.perf_counter() - t0)
+#         X, Y = np.meshgrid(x_vals, y_vals)
+#         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+#         cs1 = axes[0].contourf(X, Y, Z_coll, cmap='viridis')
+#         axes[0].set_xlabel(xlabel)
+#         axes[0].set_ylabel(ylabel)
+#         axes[0].set_title(f"Avg Collisions vs {xlabel} & {ylabel}")
+#         fig.colorbar(cs1, ax=axes[0], label="Collisions")
 
-            pso_violations[i, j] = np.mean(coll_list)
-            pso_times[i, j]      = np.mean(ct_list)
+#         cs2 = axes[1].contourf(X, Y, Z_time, cmap='viridis')
+#         axes[1].set_xlabel(xlabel)
+#         axes[1].set_ylabel(ylabel)
+#         axes[1].set_title(f"Avg Time vs {xlabel} & {ylabel}")
+#         fig.colorbar(cs2, ax=axes[1], label="Time (s)")
 
-            # save as you go
-            np.save(os.path.join(SAVE_DIR, "pso_violations.npy"), pso_violations)
-            np.save(os.path.join(SAVE_DIR, "pso_times.npy"), pso_times)
+#         plt.tight_layout()
+#         fig.savefig(os.path.join(SAVE_DIR, f"{out_prefix}_sensitivity.png"), dpi=300)
+#         plt.show()
 
-    # === Plotting ===
-    P, I = np.meshgrid(particles, iterations)
+#     # # w vs c1 (c2 fixed)
+#     # run_grid(
+#     #     x_vals=w_values,
+#     #     y_vals=c1_values,
+#     #     fixed_param='pso_c2',
+#     #     fixed_val=default['c2'],
+#     #     xlabel='pso_w',
+#     #     ylabel='pso_c1',
+#     #     out_prefix='w_c1'
+#     # )
 
-    fig, axs = plt.subplots(1, 2, figsize=(14, 5))
+#     # # w vs c2 (c1 fixed)
+#     # run_grid(
+#     #     x_vals=w_values,
+#     #     y_vals=c2_values,
+#     #     fixed_param='pso_c1',
+#     #     fixed_val=default['c1'],
+#     #     xlabel='pso_w',
+#     #     ylabel='pso_c2',
+#     #     out_prefix='w_c2'
+#     # )
 
-    cs0 = axs[0].contourf(P, I, pso_violations, cmap='viridis')
-    axs[0].set_title("Mean Collisions vs PSO Params")
-    axs[0].set_xlabel("Particles")
-    axs[0].set_ylabel("Iterations")
-    fig.colorbar(cs0, ax=axs[0], label="Avg Collisions")
+#     # c1 vs c2 (w fixed)
+#     run_grid(
+#         x_vals=c1_values,
+#         y_vals=c2_values,
+#         fixed_param='pso_w',
+#         fixed_val=default['w'],
+#         xlabel='pso_c1',
+#         ylabel='pso_c2',
+#         out_prefix='c1_c2'
+#     )
 
-    cs1 = axs[1].contourf(P, I, pso_times, cmap='viridis')
-    axs[1].set_title("Mean Compute Time vs PSO Params")
-    axs[1].set_xlabel("Particles")
-    axs[1].set_ylabel("Iterations")
-    fig.colorbar(cs1, ax=axs[1], label="Avg Time (s)")
 
-    plt.tight_layout()
-    fig_path = os.path.join(SAVE_DIR, "pso_sensitivity_contours.png")
-    plt.savefig(fig_path, dpi=300)
-    plt.show()
+
+'''GOOD SENSITIVITY ANALSYSIS'''
+# if __name__ == '__main__':
+#     import time
+#     import numpy as np
+#     import matplotlib.pyplot as plt
+#     from tqdm import tqdm
+#     import os
+
+#     from paths import paths_dict
+
+#     # where to save intermediate & final results
+#     SAVE_DIR = os.path.expanduser("~/Documents/SimulationResults")
+#     os.makedirs(SAVE_DIR, exist_ok=True)
+
+#     # === PSO hyperparameter grid ===
+#     particles  = [5, 10, 25, 50, 100]
+#     iterations = [5, 10, 15, 20]
+#     n_runs     = 10
+
+#     pso_violations = np.zeros((len(iterations), len(particles)))
+#     pso_times      = np.zeros_like(pso_violations)
+
+#     for i, iters in enumerate(tqdm(iterations, desc="Iters")):
+#         for j, npart in enumerate(particles):
+#             coll_list, ct_list = [], []
+#             for run in range(n_runs):
+#                 print(f'Running: {iters} itterations and {npart} particles run {run}')
+                # sim_kwargs = dict(
+                #     paths_dict=paths_dict,
+                #     sim_duration=20000.0,
+                #     visualize=False,
+                #     add_con_plot=False,      # no per-call plotting
+                #     initial_speed=100.0,
+                #     acceleration=1.0,
+                #     min_speed=80.0,
+                #     max_speed=130.0,
+                #     spawn_interval=300.0,
+                #     fps=30,
+                #     min_sep=3000.0,
+                #     sep_weight=1,
+                #     fuel_weight=0,
+                #     pso_particles=npart,
+                #     pso_w=0.64,
+                #     pso_c1=1.5,
+                #     pso_c2=1.74,
+                #     pso_iters=iters,
+                #     horizon_steps=3000,
+                #     step_skip=20,
+                #     local_comm_radius=20000,
+                #     local_horizon=40,
+                #     local_sep_weight=10000.0,
+                #     LOCAL_SEP_RADIUS=6000
+                # )
+#                 t0 = time.perf_counter()
+#                 out = runme(**sim_kwargs)
+#                 coll_list.append(out['collisions'])
+#                 ct_list.append(time.perf_counter() - t0)
+
+#             pso_violations[i, j] = np.mean(coll_list)
+#             pso_times[i, j]      = np.mean(ct_list)
+
+#             # save as you go
+#             np.save(os.path.join(SAVE_DIR, "pso_violations.npy"), pso_violations)
+#             np.save(os.path.join(SAVE_DIR, "pso_times.npy"), pso_times)
+
+#     # === Plotting ===
+#     P, I = np.meshgrid(particles, iterations)
+
+#     fig, axs = plt.subplots(1, 2, figsize=(14, 5))
+
+#     cs0 = axs[0].contourf(P, I, pso_violations, cmap='viridis')
+#     axs[0].set_title("Mean Collisions vs PSO Params")
+#     axs[0].set_xlabel("Particles")
+#     axs[0].set_ylabel("Iterations")
+#     fig.colorbar(cs0, ax=axs[0], label="Avg Collisions")
+
+#     cs1 = axs[1].contourf(P, I, pso_times, cmap='viridis')
+#     axs[1].set_title("Mean Compute Time vs PSO Params")
+#     axs[1].set_xlabel("Particles")
+#     axs[1].set_ylabel("Iterations")
+#     fig.colorbar(cs1, ax=axs[1], label="Avg Time (s)")
+
+#     plt.tight_layout()
+#     fig_path = os.path.join(SAVE_DIR, "pso_sensitivity_contours.png")
+#     plt.savefig(fig_path, dpi=300)
+#     plt.show()
 
 
 
